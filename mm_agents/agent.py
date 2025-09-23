@@ -23,11 +23,11 @@ from google.api_core.exceptions import InvalidArgument, ResourceExhausted, Inter
 
 from mm_agents.accessibility_tree_wrap.heuristic_retrieve import filter_nodes, draw_bounding_boxes
 from mm_agents.prompt_templates import ACTION_SPACE_PROMPTS, OBSERVATION_SPACE_PROMPTS, SYSTEM_PROMPT
+from configs.config import OPENAI_API_KEY
 
 logger = logging.getLogger("desktopenv.agent")
 
 pure_text_settings = ['a11y_tree']
-
 
 # Function to encode the image
 def encode_image(image_content):
@@ -607,7 +607,7 @@ class PromptAgent:
         if self.model.startswith("gpt"):
             headers = {
                 "Content-Type": "application/json",
-                "Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}"
+                "Authorization": f"Bearer {OPENAI_API_KEY}"
             }
             logger.info("Generating content with GPT model: %s", self.model)
             response = requests.post(
