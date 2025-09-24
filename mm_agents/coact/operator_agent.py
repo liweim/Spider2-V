@@ -7,7 +7,7 @@ import json
 import os
 import traceback
 from typing import Any, Callable, Literal, Optional, Union
-from desktop_env.desktop_env import DesktopEnv
+from desktop_env.envs.desktop_env import DesktopEnv
 
 from .autogen.llm_config import LLMConfig
 from .autogen.agentchat.agent import Agent
@@ -151,8 +151,8 @@ class OrchestratorUserProxyAgent(MultimodalConversableAgent):
         description: Optional[str] = None,
 
         # GUI Agent config
-        provider_name: str = "docker",
         path_to_vm: str = None,
+        snapshot_name: str = "init_state",
         observation_type: str = "screenshot",
         screen_width: int = 1920,
         screen_height: int = 1080,
@@ -163,7 +163,6 @@ class OrchestratorUserProxyAgent(MultimodalConversableAgent):
         cut_off_steps: int = 200,
         history_save_dir: str = "",
         llm_model: str = "o4-mini",
-        region: str = "us-east-1",
         client_password: str = "",
         user_instruction: str = "",
     ):
@@ -200,25 +199,14 @@ class OrchestratorUserProxyAgent(MultimodalConversableAgent):
             "sleep_after_execution": sleep_after_execution,
             "truncate_history_inputs": truncate_history_inputs,
         }
-        self.region = region
         self.client_password = client_password
-
-        from desktop_env.providers.aws.manager import IMAGE_ID_MAP
-        screen_size = (screen_width, screen_height)
-        ami_id = IMAGE_ID_MAP[region].get(screen_size, IMAGE_ID_MAP[region][(1920, 1080)])
 
         self.env = DesktopEnv(
             path_to_vm=path_to_vm,
             action_space="pyautogui",
-            provider_name=provider_name,
-            os_type="Ubuntu",
-            region=region,
-            snapshot_name=ami_id,
-            screen_size=screen_size,
+            snapshot_name=snapshot_name,
             headless=True,
             require_a11y_tree=observation_type in ["a11y_tree", "screenshot_a11y_tree", "som"],
-            enable_proxy=False,
-            client_password=client_password
         )
 
         self.history_save_dir = history_save_dir
@@ -232,7 +220,6 @@ class OrchestratorUserProxyAgent(MultimodalConversableAgent):
 
     def reset(self, task_config: dict[str, Any]):
         obs = self.env.reset(task_config=task_config)
-        print(f"VM started on localhost:{self.env.vnc_port}", flush=True)
         return obs
 
     def generate_reply(

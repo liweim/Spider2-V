@@ -77,7 +77,7 @@ def config() -> argparse.Namespace:
 
     # example config
     parser.add_argument('-e', "--example", type=str, default=os.path.join('evaluation_examples', 'test_one.json'), help="JSON dict containing example ids to run")
-    parser.add_argument("--exclude_account", action='store_true', help="Whether to use RAG for the agent")
+    parser.add_argument("--exclude_account", action='store_true')
     parser.add_argument("--execution_feedback", action='store_true', help="whether to use execution feedback for the agent")
     parser.add_argument("--rag", action='store_true', help="Whether to use RAG for the agent")
     parser.add_argument("--rag_topk", type=int, default=4, help="Top k to use for RAG")
@@ -196,6 +196,15 @@ def get_result_dir(args):
     # result_dir += f"_temp{args.temperature}_traj{args.max_trajectory_length}"
     return os.path.join(args.result_dir, result_dir)
 
+def save_args_to_settings(args, result_dir):
+    """Save args to settings.txt in the result subdirectory"""
+    os.makedirs(result_dir, exist_ok=True)
+    settings_file = os.path.join(result_dir, "settings.txt")
+    
+    with open(settings_file, "w", encoding="utf-8") as f:
+        args_dict = vars(args)
+        for key, value in sorted(args_dict.items()):
+            f.write(f"{key} = {value}\n")
 
 def get_examples(args, result_dir: str, easy_first: bool = True) -> List[Dict[str, str]]:
     """ Get [Filter] the list of example dict for the current experiment.
@@ -289,6 +298,7 @@ if __name__ == '__main__':
     args = config()
 
     result_dir = get_result_dir(args)
+    save_args_to_settings(args, result_dir)
     examples = get_examples(args, result_dir)
 
     logger.info(f"Old result before running:\n{get_result(result_dir)}")

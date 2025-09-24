@@ -6,7 +6,7 @@ import time
 from typing import Any, Dict, List, Tuple
 
 import openai
-from desktop_env.desktop_env import DesktopEnv
+from desktop_env.envs.desktop_env import DesktopEnv
 from openai import OpenAI  # pip install --upgrade openai>=1.66.2
 
 logger = logging.getLogger("desktopenv")

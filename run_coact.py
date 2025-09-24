@@ -56,12 +56,11 @@ def config() -> argparse.Namespace:
     )
 
     # environment config
-    parser.add_argument("--path_to_vm", type=str, default=None)
-    parser.add_argument("--provider_name", type=str, default="aws")
+    parser.add_argument("--path_to_vm", type=str, default="vm_data/Ubuntu0/Ubuntu0/Ubuntu0.vmx")
+    parser.add_argument("--snapshot_name", type=str, default="init_state")
     parser.add_argument("--screen_width", type=int, default=1920)
     parser.add_argument("--screen_height", type=int, default=1080)
     parser.add_argument("--sleep_after_execution", type=float, default=0.5)
-    parser.add_argument("--region", type=str, default="us-east-1")
     parser.add_argument("--client_password", type=str, default="password") # osworld-public-evaluation for aws
 
     # agent config
@@ -77,17 +76,22 @@ def config() -> argparse.Namespace:
     # example config
     parser.add_argument("--domain", type=str, default="all")
     parser.add_argument(
-        "--test_all_meta_path", type=str, default="evaluation_examples/test_all.json"
+        "--test_all_meta_path", type=str, default=os.path.join('evaluation_examples', 'test_one.json')
     )
     parser.add_argument(
         "--test_config_base_dir", type=str, default="evaluation_examples/examples"
     )
-    parser.add_argument("--resume", action="store_true", help="Skip tests that have already been run")
-    parser.add_argument("--resume_fail", action="store_true", help="Skip succeeded tests")
+    parser.add_argument("--rerun", action="store_true", help="Rerun tests that have already been run")
+    parser.add_argument("--rerun_fail", action="store_true", help="Rerun failed tests")
     parser.add_argument("--get_score", action="store_true", help="Get scores")
 
+    # RAG related
+    parser.add_argument("--rag", action='store_true', help="Whether to use RAG for the agent")
+    parser.add_argument("--rag_topk", type=int, default=4, help="Top k to use for RAG")
+    parser.add_argument("--rag_filename", type=str, default="retrieved_chunk_size_512_chunk_overlap_20_topk_4_embed_bge-large-en-v1.5.txt", help="RAG retrieved context file name")
+
     # logging related
-    parser.add_argument("--result_dir", type=str, default="./results")
+    parser.add_argument("--result_dir", type=str, default="./results/coact_15_10_10_20")
     parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to run in parallel")
     parser.add_argument("--log_level", type=str, choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'], 
                        default='INFO', help="Set the logging level")
@@ -133,12 +137,35 @@ logger.addHandler(stdout_handler)
 logger = logging.getLogger("desktopenv.expeiment")
 
 
+def get_retrieved_context(config_path: str, topk: int = 4, file_name: str = "retrieved_chunk_size_512_chunk_overlap_20_topk_4_embed_bge-large-en-v1.5.txt") -> str:
+    """Get retrieved context from RAG file"""
+    context_path = os.path.join(os.path.dirname(config_path), file_name)
+    if os.path.exists(context_path):
+        with open(context_path, "r", encoding="utf-8") as f:
+            context = f.read().strip()
+        if context.strip() == "": return None
+        splits = context.split("Documentation Source:")
+        if len(splits) > topk + 1: # the first is ""
+            return "Documentation Source:".join(splits[:topk + 1])
+        return context
+    raise ValueError(f"Retrieved context not found under {os.path.dirname(config_path)}")
+
+def save_args_to_settings(args, result_dir):
+    """Save args to settings.txt in the result subdirectory"""
+    os.makedirs(result_dir, exist_ok=True)
+    settings_file = os.path.join(result_dir, "settings.txt")
+    
+    with open(settings_file, "w", encoding="utf-8") as f:
+        args_dict = vars(args)
+        for key, value in sorted(args_dict.items()):
+            f.write(f"{key} = {value}\n")
+
 def process_task(task_info, 
-                provider_name,
                 path_to_vm,
+                snapshot_name="init_state",
                 orchestrator_model="o3",
                 coding_model='o4-mini',
-                save_dir='results',
+                result_dir='results/coact',
                 orchestrator_max_steps=15,
                 cua_max_steps=25,
                 coding_max_steps=20,
@@ -147,8 +174,10 @@ def process_task(task_info,
                 screen_height=1080,
                 sleep_after_execution=0.5,
                 config_path="OAI_CONFIG_LIST",
-                region="us-east-1",
                 client_password="",
+                rag=False,
+                rag_topk=4,
+                rag_filename="retrieved_chunk_size_512_chunk_overlap_20_topk_4_embed_bge-large-en-v1.5.txt",
                 ):
     """Worker function to process a single task"""
     domain, ex_id, cfg = task_info
@@ -160,112 +189,116 @@ def process_task(task_info,
     for config_item in llm_config.config_list:
         config_item.api_key = SecretStr(OPENAI_API_KEY)
     
-    history_save_dir = os.path.join(save_dir, "coact", f"{domain}/{ex_id}")
+    history_save_dir = os.path.join(result_dir, f"{domain}/{ex_id}")
     if not os.path.exists(history_save_dir):
         os.makedirs(history_save_dir)
     
     task_config = json.load(open(cfg))
-    retry = 0
 
-    while True:
-        try:
-            with llm_config:
-                orchestrator = OrchestratorAgent(
-                    name="orchestrator",
-                    system_message=TASK_DESCRIPTION
-                )
-                orchestrator_proxy = OrchestratorUserProxyAgent(
-                    name="orchestrator_proxy",
-                    is_termination_msg=lambda x: x.get("content", "") and (x.get("content", "")[0]["text"].lower() == "terminate" or x.get("content", "")[0]["text"].lower() == "infeasible"),
-                    human_input_mode="NEVER",
-                    provider_name=provider_name,
-                    path_to_vm=path_to_vm,
-                    screen_width=screen_width,
-                    screen_height=screen_height,
-                    sleep_after_execution=sleep_after_execution,
-                    code_execution_config=False,
-                    history_save_dir=history_save_dir,
-                    llm_model=coding_model,
-                    truncate_history_inputs=cua_max_steps + 1,
-                    cua_max_steps=cua_max_steps,
-                    coding_max_steps=coding_max_steps,
-                    cut_off_steps=cut_off_steps,
-                    region=region,
-                    client_password=client_password,
-                    user_instruction=task_config["instruction"]
-                )
+    # Add RAG context if enabled
+    if rag: 
+        task_config['context'] = get_retrieved_context(cfg, rag_topk, file_name=rag_filename)
+    else: 
+        task_config['context'] = None
 
-            orchestrator_proxy.reset(task_config=task_config)
-            time.sleep(60)
-            screenshot = orchestrator_proxy.env.controller.get_screenshot()
-
-            with open(os.path.join(history_save_dir, f'initial_screenshot_orchestrator.png'), "wb") as f:
-                f.write(screenshot)
-                
-            orchestrator_proxy.initiate_chat(
-                recipient=orchestrator,
-                message=f"""{task_config["instruction"]}
-Check my computer screenshot and describe it first. If this task is possible to complete, please complete it on my computer. If not, reply with "INFEASIBLE" to end the conversation.
-I will not provide further information to you.""" + "<img data:image/png;base64," + base64.b64encode(screenshot).decode("utf-8") + ">",
-                max_turns=orchestrator_max_steps
+    try:
+        with llm_config:
+            orchestrator = OrchestratorAgent(
+                name="orchestrator",
+                system_message=TASK_DESCRIPTION
             )
-            
-            chat_history = []
-            key = list(orchestrator_proxy.chat_messages.keys())[0]
-            chat_messages = orchestrator_proxy.chat_messages[key]
-            for item in chat_messages:
-                item.pop('tool_responses', None)
-                if item.get('role', None) in ['tool', 'assistant'] and item.get('content', None):
-                    for msg in item['content']:
-                        if msg.get('type', None) == 'image_url':
-                            msg['image_url'] = "<image>"
-                chat_history.append(item)
-            
-            with open(os.path.join(history_save_dir, f'chat_history.json'), "w") as f:
-                json.dump(chat_history, f)
+            orchestrator_proxy = OrchestratorUserProxyAgent(
+                name="orchestrator_proxy",
+                is_termination_msg=lambda x: x.get("content", "") and (x.get("content", "")[0]["text"].lower() == "terminate" or x.get("content", "")[0]["text"].lower() == "infeasible"),
+                human_input_mode="NEVER",
+                path_to_vm=path_to_vm,
+                snapshot_name=snapshot_name,
+                screen_width=screen_width,
+                screen_height=screen_height,
+                sleep_after_execution=sleep_after_execution,
+                code_execution_config=False,
+                history_save_dir=history_save_dir,
+                llm_model=coding_model,
+                truncate_history_inputs=cua_max_steps + 1,
+                cua_max_steps=cua_max_steps,
+                coding_max_steps=coding_max_steps,
+                cut_off_steps=cut_off_steps,
+                client_password=client_password,
+                user_instruction=task_config["instruction"]
+            )
 
-            if chat_history[-1]['role'] == 'user' and 'INFEASIBLE' in chat_history[-1]['content'][0]['text']:
-                orchestrator_proxy.env.action_history.append("FAIL")
+        orchestrator_proxy.reset(task_config=task_config)
+        time.sleep(60)
+        screenshot = orchestrator_proxy.env.controller.get_screenshot()
 
-            cua_steps = len(glob.glob(f"{history_save_dir}/cua_output*/step_*.png"))
-            coding_paths = glob.glob(f"{history_save_dir}/coding_output*/chat_history.json")
-            coding_steps = 0
-            for hist in coding_paths:
-                with open(hist, 'r') as f:
-                    hist = json.dumps(json.load(f))
-                    coding_steps += hist.count('exitcode:')
-            # 更新：cut_off_steps已经更新到orchestrator_proxy
-            # if cua_steps + coding_steps > cut_off_steps:
-            #     score = 0.0
-            # else:
-            #     score = orchestrator_proxy.env.evaluate()
-            score = orchestrator_proxy.env.evaluate()
-            print(f"Score: {score}")
+        with open(os.path.join(history_save_dir, f'initial_screenshot_orchestrator.png'), "wb") as f:
+            f.write(screenshot)
             
-            with open(os.path.join(history_save_dir, f'result.txt'), "w") as f:
-                f.write(str(score))
-            break
-                    
-        except Exception as e:
-            retry += 1
-            if retry < 3:
-                shutil.rmtree(history_save_dir)
-                os.makedirs(history_save_dir)
-                print(f"Retry {retry} times, error: {str(e)}")
-                traceback.print_exc()
-                continue
+        # Prepare the initial message with optional RAG context
+        initial_message = f"""{task_config["instruction"]}
+Check my computer screenshot and describe it first. If this task is possible to complete, please complete it on my computer. If not, reply with "INFEASIBLE" to end the conversation.
+I will not provide further information to you."""
 
-            print(f"Error processing task {domain}/{ex_id}")
-            traceback.print_exc()
-            score = 0.0
-            with open(os.path.join(history_save_dir, f'result.txt'), "w") as f:
-                f.write(str(score))
-            with open(os.path.join(history_save_dir, f'err_reason.txt'), "w") as f:
-                f.write(f"Fatal error: {str(e)}")
-        finally:
-            if orchestrator_proxy.env is not None:
-                orchestrator_proxy.env.close()
-                orchestrator_proxy.env.clean_lock("./vmware_vm_data")
+        # Add RAG context if available
+        if task_config.get('context'):
+            context_message = f"\n\nWe also retrieve relevant documentation from the web to help you with the task:\n{task_config['context']}"
+            initial_message += context_message
+
+        initial_message += "<img data:image/png;base64," + base64.b64encode(screenshot).decode("utf-8") + ">"
+        
+        orchestrator_proxy.initiate_chat(
+            recipient=orchestrator,
+            message=initial_message,
+            max_turns=orchestrator_max_steps
+        )
+        
+        chat_history = []
+        key = list(orchestrator_proxy.chat_messages.keys())[0]
+        chat_messages = orchestrator_proxy.chat_messages[key]
+        for item in chat_messages:
+            item.pop('tool_responses', None)
+            if item.get('role', None) in ['tool', 'assistant'] and item.get('content', None):
+                for msg in item['content']:
+                    if msg.get('type', None) == 'image_url':
+                        msg['image_url'] = "<image>"
+            chat_history.append(item)
+        
+        with open(os.path.join(history_save_dir, f'chat_history.json'), "w") as f:
+            json.dump(chat_history, f)
+
+        if chat_history[-1]['role'] == 'user' and 'INFEASIBLE' in chat_history[-1]['content'][0]['text']:
+            orchestrator_proxy.env.action_history.append("FAIL")
+
+        cua_steps = len(glob.glob(f"{history_save_dir}/cua_output*/step_*.png"))
+        coding_paths = glob.glob(f"{history_save_dir}/coding_output*/chat_history.json")
+        coding_steps = 0
+        for hist in coding_paths:
+            with open(hist, 'r') as f:
+                hist = json.dumps(json.load(f))
+                coding_steps += hist.count('exitcode:')
+        # 更新：cut_off_steps已经更新到orchestrator_proxy
+        # if cua_steps + coding_steps > cut_off_steps:
+        #     score = 0.0
+        # else:
+        #     score = orchestrator_proxy.env.evaluate()
+        score = orchestrator_proxy.env.evaluate()
+        print(f"Score: {score}")
+        
+        with open(os.path.join(history_save_dir, f'result.txt'), "w") as f:
+            f.write(str(score))
+        
+        if orchestrator_proxy.env is not None:
+            orchestrator_proxy.env.close()
+            # orchestrator_proxy.env.clean_lock("./vmware_vm_data")
+                
+    except Exception as e:
+        print(f"Error processing task {domain}/{ex_id}")
+        traceback.print_exc()
+        score = 0.0
+        with open(os.path.join(history_save_dir, f'result.txt'), "w") as f:
+            f.write(str(score))
+        with open(os.path.join(history_save_dir, f'err_reason.txt'), "w") as f:
+            f.write(f"Fatal error: {str(e)}")
     
     return domain, score
 
@@ -281,21 +314,33 @@ if __name__ == "__main__":
     if not args.get_score:
         tasks = []
         scores: Dict[str, List[float]] = {}
+        
+        # Save args to settings.txt
+        save_args_to_settings(args, args.result_dir)
+        
+        # Process each domain and example
         for domain in test_all_meta:
             scores[domain] = []
             for ex_id in test_all_meta[domain]:
-                target_dir = os.path.join(args.result_dir, 'coact', f"{domain}/{ex_id}")
+                target_dir = os.path.join(args.result_dir, f"{domain}/{ex_id}")
                 result_path = os.path.join(target_dir, 'result.txt')
-                if args.resume and os.path.exists(result_path) and not os.path.exists(os.path.join(target_dir, 'err_reason.txt')):# and float(open(result_path, 'r').read()) > 0.0:
-                    print(f"Results already exist in {domain}/{ex_id}, result: {open(result_path, 'r').read()}")
-                    continue
-                elif args.resume_fail and os.path.exists(result_path) and not os.path.exists(os.path.join(target_dir, 'err_reason.txt')) and float(open(result_path, 'r').read()) > 0.0:
-                    print(f"Results already exist in {domain}/{ex_id}, result: {open(result_path, 'r').read()}")
-                    continue
-                elif os.path.exists(target_dir):
-                    shutil.rmtree(target_dir)
-                cfg = os.path.join(args.test_config_base_dir, f"{domain}/{ex_id}.json")
-                tasks.append((domain, ex_id, cfg))
+                cfg = os.path.join(args.test_config_base_dir, f"{domain}/{ex_id}/{ex_id}.json")
+                
+                # Check if we should skip this task
+                should_skip = False
+                if not args.rerun and os.path.exists(result_path) and not os.path.exists(os.path.join(target_dir, 'err_reason.txt')):
+                    result = float(open(result_path, 'r').read())
+                    print(f"Results already exist in {domain}/{ex_id}, result: {result}")
+                    
+                    # Skip successful tasks, or skip failed tasks if not rerun_fail
+                    if result > 0.0 or not args.rerun_fail:
+                        should_skip = True
+                
+                if not should_skip:
+                    # Clean up existing directory and add to tasks
+                    if os.path.exists(target_dir):
+                        shutil.rmtree(target_dir)
+                    tasks.append((domain, ex_id, cfg))
 
         # Check if there are any tasks to process
         if not tasks:
@@ -305,7 +350,7 @@ if __name__ == "__main__":
             for domain in test_all_meta:
                 domain_scores = []
                 for ex_id in test_all_meta[domain]:
-                    score_file = os.path.join(args.result_dir, 'coact', f"{domain}/{ex_id}/result.txt")
+                    score_file = os.path.join(args.result_dir, f"{domain}/{ex_id}/result.txt")
                     if os.path.exists(score_file):
                         with open(score_file, "r") as f:
                             domain_scores.append(float(f.read()))
@@ -320,9 +365,9 @@ if __name__ == "__main__":
 
             # Create a partial function with fixed config_path, model and debug
             process_func = partial(process_task, 
-                                provider_name=args.provider_name,
                                 path_to_vm=args.path_to_vm,
-                                save_dir=args.result_dir,
+                                snapshot_name=args.snapshot_name,
+                                result_dir=args.result_dir,
                                 coding_model=args.coding_model,
                                 orchestrator_model=args.orchestrator_model,
                                 config_path=args.oai_config_path, 
@@ -333,8 +378,10 @@ if __name__ == "__main__":
                                 screen_width=args.screen_width,
                                 screen_height=args.screen_height,
                                 sleep_after_execution=args.sleep_after_execution,
-                                region=args.region,
-                                client_password=args.client_password
+                                client_password=args.client_password,
+                                rag=args.rag,
+                                rag_topk=args.rag_topk,
+                                rag_filename=args.rag_filename
                                 )
 
             # Process tasks in parallel
@@ -356,7 +403,7 @@ if __name__ == "__main__":
     count_remain = 0
     for domain in test_all_meta:
         for ex_id in test_all_meta[domain]:
-            score_file = os.path.join(args.result_dir, 'coact', f"{domain}/{ex_id}/result.txt")
+            score_file = os.path.join(args.result_dir, f"{domain}/{ex_id}/result.txt")
             if os.path.exists(score_file):
                 with open(score_file, "r") as f:
                     all_scores.append(float(f.read()))

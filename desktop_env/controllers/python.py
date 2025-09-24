@@ -2,7 +2,8 @@ import json
 import logging
 import random
 from typing import Any, Dict, Optional
-
+import time
+import traceback
 import requests
 
 from desktop_env.envs.actions import KEYBOARD_KEYS
@@ -16,6 +17,8 @@ class PythonController:
         self.vm_ip = vm_ip
         self.http_server = f"http://{vm_ip}:5000"
         self.pkgs_prefix = pkgs_prefix  # fixme: this is a hacky way to execute python commands. fix it and combine it with installation of packages
+        self.retry_times = 1
+        self.retry_interval = 5
 
     def get_screenshot(self, retry_times=20):
         """
@@ -96,6 +99,85 @@ class PythonController:
         except requests.exceptions.RequestException as e:
             logger.error("An error occurred while trying to execute the command: %s", e)
             return {"status": "error", "message": e}
+    
+    def run_python_script(self, script: str) -> Optional[Dict[str, Any]]:
+        """
+        Executes a python script on the server.
+        """
+        payload = json.dumps({"code": script})
+
+        for _ in range(self.retry_times):
+            try:
+                response = requests.post(self.http_server + "/run_python", headers={'Content-Type': 'application/json'},
+                                         data=payload, timeout=90)
+                if response.status_code == 200:
+                    return response.json()
+                else:
+                    return {"status": "error", "message": "Failed to execute command.", "output": None, "error": response.json()["error"]}
+            except requests.exceptions.ReadTimeout:
+                break
+            except Exception:
+                logger.error("An error occurred while trying to execute the command: %s", traceback.format_exc())
+                logger.info("Retrying to execute command.")
+            time.sleep(self.retry_interval)
+
+        logger.error("Failed to execute command.")
+        return {"status": "error", "message": "Failed to execute command.", "output": "", "error": "Retry limit reached."}
+    
+    def run_bash_script(self, script: str, timeout: int = 30, working_dir: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """
+        Executes a bash script on the server.
+        
+        :param script: The bash script content (can be multi-line)
+        :param timeout: Execution timeout in seconds (default: 30)
+        :param working_dir: Working directory for script execution (optional)
+        :return: Dictionary with status, output, error, and returncode, or None if failed
+        """
+        print("*"*100)
+        print(script)
+        print("*"*100)
+        payload = json.dumps({
+            "script": script,
+            "timeout": timeout,
+            "working_dir": working_dir
+        })
+
+        for _ in range(self.retry_times):
+            try:
+                response = requests.post(
+                    self.http_server + "/run_bash_script", 
+                    headers={'Content-Type': 'application/json'},
+                    data=payload, 
+                    timeout=timeout + 100  # Add buffer to HTTP timeout
+                )
+                if response.status_code == 200:
+                    result = response.json()
+                    logger.info("Bash script executed successfully with return code: %d", result.get("returncode", -1))
+                    return result
+                else:
+                    logger.error("Failed to execute bash script. Status code: %d, response: %s", 
+                                response.status_code, response.text)
+                    logger.info("Retrying to execute bash script.")
+            except requests.exceptions.ReadTimeout:
+                logger.error("Bash script execution timed out")
+                return {
+                    "status": "error",
+                    "output": "",
+                    "error": f"Script execution timed out after {timeout} seconds",
+                    "returncode": -1
+                }
+            except Exception as e:
+                logger.error("An error occurred while trying to execute the bash script: %s", e)
+                logger.info("Retrying to execute bash script.")
+            time.sleep(self.retry_interval)
+
+        logger.error("Failed to execute bash script after %d retries.", self.retry_times)
+        return {
+            "status": "error",
+            "output": "",
+            "error": f"Failed to execute bash script after {self.retry_times} retries",
+            "returncode": -1
+        }
 
     def execute_action(self, action: Dict[str, Any]):
         """

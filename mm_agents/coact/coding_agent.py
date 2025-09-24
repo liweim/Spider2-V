@@ -1,5 +1,5 @@
 from typing import Any, Callable, Optional
-from desktop_env.desktop_env import DesktopEnv
+from desktop_env.envs.desktop_env import DesktopEnv
 
 from .autogen.llm_config import LLMConfig
 from .autogen.code_utils import PYTHON_VARIANTS
