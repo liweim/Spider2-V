@@ -262,9 +262,9 @@ def snowflake_login_setup(controller, **config):
     """
     listening_port = config.get('listening_port', 9222)
     remote_debugging_url = f"http://{controller.vm_ip}:{listening_port}"
-    url = config.get('url', 'https://app.snowflake.com')
     settings_file = config.get('settings_file', 'evaluation_examples/settings/snowflake/settings.json')
     settings = json.load(open(settings_file, 'r'))
+    url = settings['account']
 
     with sync_playwright() as p:
         browser = get_browser(p, remote_debugging_url)
@@ -273,27 +273,18 @@ def snowflake_login_setup(controller, **config):
             return
         
         context = browser.contexts[0]
-        page = find_page_by_url(context, url, matching_func=lambda x, y: x.startswith(y))
-        if page is None:
-            page = context.new_page()
-            page.goto(url, wait_until='load')
+        page = context.pages[0]  # Use the existing first page
+        page.goto(url, wait_until='load')
 
         try:
-            account = page.locator('input[aria-label="Account identifier"]')
-            expect(account).to_be_editable(timeout=60000)
-            account.fill(settings['account'])
-            signin = page.locator('div[role="button"][aria-disabled="false"]').filter(has_text="Sign in")
-            expect(signin).to_be_visible()
-            signin.click()
-            username = page.locator('input[name="username"]')
-            expect(username).to_be_editable(timeout=60000)
+            username = page.locator('input[type="text"]')
+            expect(username).to_be_editable()
             username.fill(settings['user'])
-            password = page.locator('input[name="password"]')
+            password = page.locator('input[type="password"]')
             expect(password).to_be_editable()
             password.fill(settings['password'])
-            button = page.locator('div[role="button"][aria-disabled="false"]').filter(has_text="Sign in")
-            expect(button).to_be_enabled()
-            button.click()
+            buttons = page.query_selector_all("text=/Sign in/i")
+            buttons[-1].click()
             nav = page.locator('nav[role="navigation"]')
             expect(nav).to_be_visible(timeout=60000)
         except Exception as e:

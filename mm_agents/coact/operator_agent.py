@@ -165,6 +165,7 @@ class OrchestratorUserProxyAgent(MultimodalConversableAgent):
         llm_model: str = "o4-mini",
         client_password: str = "",
         user_instruction: str = "",
+        headless: bool = False,
     ):
         description = (
             description if description is not None else self.DEFAULT_USER_PROXY_AGENT_DESCRIPTIONS[human_input_mode]
@@ -205,7 +206,7 @@ class OrchestratorUserProxyAgent(MultimodalConversableAgent):
             path_to_vm=path_to_vm,
             action_space="pyautogui",
             snapshot_name=snapshot_name,
-            headless=True,
+            headless=headless,
             require_a11y_tree=observation_type in ["a11y_tree", "screenshot_a11y_tree", "som"],
         )
 

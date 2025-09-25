@@ -17,10 +17,10 @@ class PythonController:
         self.vm_ip = vm_ip
         self.http_server = f"http://{vm_ip}:5000"
         self.pkgs_prefix = pkgs_prefix  # fixme: this is a hacky way to execute python commands. fix it and combine it with installation of packages
-        self.retry_times = 1
-        self.retry_interval = 5
+        self.retry_times = 3
+        self.retry_interval = 10
 
-    def get_screenshot(self, retry_times=20):
+    def get_screenshot(self, retry_times=5):
         """
         Gets a screenshot from the server. With the cursor.
         """
@@ -37,7 +37,7 @@ class PythonController:
             logger.error("Failed to get screenshot. Status code: %d", response.status_code)
             return None
 
-    def get_terminal_output(self, retry_times=20):
+    def get_terminal_output(self, retry_times=5):
         """ Gets the terminal output from the server. None -> no terminal output or unexpected error.
         """
         response = requests.get(self.http_server + "/terminal")
@@ -53,7 +53,7 @@ class PythonController:
             logger.error("Failed to get terminal output. Status code: %d", response.status_code)
             return None
 
-    def get_accessibility_tree(self, retry_times=20) -> Optional[str]:
+    def get_accessibility_tree(self, retry_times=5) -> Optional[str]:
 
         response: requests.Response = requests.get(self.http_server + "/accessibility")
         if response.status_code == 200:

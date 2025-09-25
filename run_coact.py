@@ -62,6 +62,7 @@ def config() -> argparse.Namespace:
     parser.add_argument("--screen_height", type=int, default=1080)
     parser.add_argument("--sleep_after_execution", type=float, default=0.5)
     parser.add_argument("--client_password", type=str, default="password") # osworld-public-evaluation for aws
+    parser.add_argument("--headless", action="store_true", help="Run in headless machine")
 
     # agent config
     parser.add_argument("--oai_config_path", type=str, default="mm_agents/coact/OAI_CONFIG_LIST")
@@ -100,6 +101,7 @@ def config() -> argparse.Namespace:
     return args
 
 args = config()
+result_name = os.path.basename(args.result_dir)
 
 logger = logging.getLogger()
 
@@ -109,14 +111,14 @@ logger.setLevel(log_level)
 datetime_str: str = datetime.datetime.now().strftime("%Y%m%d@%H%M%S")
 
 file_handler = logging.FileHandler(
-    os.path.join("logs", "normal-{:}.log".format(datetime_str)), encoding="utf-8"
+    os.path.join("logs", "{:}-error-{:}.log".format(result_name, datetime_str)), encoding="utf-8"
 )
 debug_handler = logging.FileHandler(
-    os.path.join("logs", "debug-{:}.log".format(datetime_str)), encoding="utf-8"
+    os.path.join("logs", "{:}-debug-{:}.log".format(result_name, datetime_str)), encoding="utf-8"
 )
 stdout_handler = logging.StreamHandler(sys.stdout)
 
-file_handler.setLevel(logging.INFO)
+file_handler.setLevel(logging.ERROR)
 debug_handler.setLevel(logging.DEBUG)
 stdout_handler.setLevel(log_level)
 
@@ -178,6 +180,7 @@ def process_task(task_info,
                 rag=False,
                 rag_topk=4,
                 rag_filename="retrieved_chunk_size_512_chunk_overlap_20_topk_4_embed_bge-large-en-v1.5.txt",
+                headless=False,
                 ):
     """Worker function to process a single task"""
     domain, ex_id, cfg = task_info
@@ -224,7 +227,8 @@ def process_task(task_info,
                 coding_max_steps=coding_max_steps,
                 cut_off_steps=cut_off_steps,
                 client_password=client_password,
-                user_instruction=task_config["instruction"]
+                user_instruction=task_config["instruction"],
+                headless=headless
             )
 
         orchestrator_proxy.reset(task_config=task_config)
@@ -381,7 +385,8 @@ if __name__ == "__main__":
                                 client_password=args.client_password,
                                 rag=args.rag,
                                 rag_topk=args.rag_topk,
-                                rag_filename=args.rag_filename
+                                rag_filename=args.rag_filename,
+                                headless=args.headless
                                 )
 
             # Process tasks in parallel
@@ -401,14 +406,25 @@ if __name__ == "__main__":
     
     all_scores = []
     count_remain = 0
+    scores = {}
     for domain in test_all_meta:
+        scores[domain] = []
         for ex_id in test_all_meta[domain]:
             score_file = os.path.join(args.result_dir, f"{domain}/{ex_id}/result.txt")
             if os.path.exists(score_file):
                 with open(score_file, "r") as f:
-                    all_scores.append(float(f.read()))
+                    score = eval(f.read())
+                    all_scores.append(score)
+                    scores[domain].append(score)
             else:
                 all_scores.append(0.0)
+                scores[domain].append(0.0)
                 count_remain += 1
+    print('=== Overall Results ===')
+    for domain in scores:
+        if scores[domain]:
+            avg_score = sum(scores[domain]) / len(scores[domain])
+            print(f"{domain}: {len(scores[domain])} tasks, average score: {avg_score:.2%}")
     all_avg_score = np.mean(all_scores)
+    print('=== Overall Average Results ===')
     print(f"All average score: {all_avg_score:.2%}, tasks remain: {count_remain}")
