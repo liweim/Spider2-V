@@ -17,6 +17,8 @@ import sys
 from configs.config import OPENAI_API_KEY
 from pydantic import SecretStr
 import numpy as np
+from utils import build_additional_contexts
+
 
 TASK_DESCRIPTION = """# Your role
 You are a task solver, you need to complete a computer-using task step-by-step.
@@ -91,6 +93,9 @@ def config() -> argparse.Namespace:
     parser.add_argument("--rag_topk", type=int, default=4, help="Top k to use for RAG")
     parser.add_argument("--rag_filename", type=str, default="retrieved_chunk_size_512_chunk_overlap_20_topk_4_embed_bge-large-en-v1.5.txt", help="RAG retrieved context file name")
 
+    # Verbose instruction config
+    parser.add_argument("--verbose_instruction", action='store_true', help="Enable verbose instruction loading")
+
     # logging related
     parser.add_argument("--result_dir", type=str, default="./results/coact_15_10_10_20")
     parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to run in parallel")
@@ -139,19 +144,6 @@ logger.addHandler(stdout_handler)
 logger = logging.getLogger("desktopenv.expeiment")
 
 
-def get_retrieved_context(config_path: str, topk: int = 4, file_name: str = "retrieved_chunk_size_512_chunk_overlap_20_topk_4_embed_bge-large-en-v1.5.txt") -> str:
-    """Get retrieved context from RAG file"""
-    context_path = os.path.join(os.path.dirname(config_path), file_name)
-    if os.path.exists(context_path):
-        with open(context_path, "r", encoding="utf-8") as f:
-            context = f.read().strip()
-        if context.strip() == "": return None
-        splits = context.split("Documentation Source:")
-        if len(splits) > topk + 1: # the first is ""
-            return "Documentation Source:".join(splits[:topk + 1])
-        return context
-    raise ValueError(f"Retrieved context not found under {os.path.dirname(config_path)}")
-
 def save_args_to_settings(args, result_dir):
     """Save args to settings.txt in the result subdirectory"""
     os.makedirs(result_dir, exist_ok=True)
@@ -181,6 +173,7 @@ def process_task(task_info,
                 rag_topk=4,
                 rag_filename="retrieved_chunk_size_512_chunk_overlap_20_topk_4_embed_bge-large-en-v1.5.txt",
                 headless=False,
+                verbose_instruction=False,
                 ):
     """Worker function to process a single task"""
     domain, ex_id, cfg = task_info
@@ -197,12 +190,17 @@ def process_task(task_info,
         os.makedirs(history_save_dir)
     
     task_config = json.load(open(cfg))
-
-    # Add RAG context if enabled
-    if rag: 
-        task_config['context'] = get_retrieved_context(cfg, rag_topk, file_name=rag_filename)
-    else: 
-        task_config['context'] = None
+    
+    # Build context using the common function
+    example_dir = os.path.dirname(cfg)
+    additional_context = build_additional_contexts(
+        task_config=task_config,
+        example_dir=example_dir,
+        use_rag=rag,
+        use_verbose_instruction=verbose_instruction,
+        rag_topk=rag_topk,
+        rag_filename=rag_filename
+    )
 
     try:
         with llm_config:
@@ -239,14 +237,7 @@ def process_task(task_info,
             f.write(screenshot)
             
         # Prepare the initial message with optional RAG context
-        initial_message = f"""{task_config["instruction"]}
-Check my computer screenshot and describe it first. If this task is possible to complete, please complete it on my computer. If not, reply with "INFEASIBLE" to end the conversation.
-I will not provide further information to you."""
-
-        # Add RAG context if available
-        if task_config.get('context'):
-            context_message = f"\n\nWe also retrieve relevant documentation from the web to help you with the task:\n{task_config['context']}"
-            initial_message += context_message
+        initial_message = task_config["instruction"] + additional_context + '\n\nCheck my computer screenshot and describe it first. If this task is possible to complete, please complete it on my computer. If not, reply with "INFEASIBLE" to end the conversation.\nI will not provide further information to you.'
 
         initial_message += "<img data:image/png;base64," + base64.b64encode(screenshot).decode("utf-8") + ">"
         
@@ -386,7 +377,8 @@ if __name__ == "__main__":
                                 rag=args.rag,
                                 rag_topk=args.rag_topk,
                                 rag_filename=args.rag_filename,
-                                headless=args.headless
+                                headless=args.headless,
+                                verbose_instruction=args.verbose_instruction
                                 )
 
             # Process tasks in parallel
@@ -426,5 +418,4 @@ if __name__ == "__main__":
             avg_score = sum(scores[domain]) / len(scores[domain])
             print(f"{domain}: {len(scores[domain])} tasks, average score: {avg_score:.2%}")
     all_avg_score = np.mean(all_scores)
-    print('=== Overall Average Results ===')
     print(f"All average score: {all_avg_score:.2%}, tasks remain: {count_remain}")

@@ -2,26 +2,31 @@
   {
     "model": "gpt-4o",
     "api_key": "KEY",
-    "tags": ["gpt-4o", "code", "explainer"]
+    "tags": ["gpt-4o", "code", "explainer"],
+    "price": [0.0025, 0.005]
   },
   {
     "model": "o3",
     "api_key": "KEY",
-    "tags": ["o3", "coding", "explainer"]
+    "tags": ["o3", "coding", "explainer"],
+    "price": [0.001, 0.004]
   },
   {
     "model": "gpt-4.1",
     "api_key": "KEY",
-    "tags": ["gpt-4.1", "coding", "explainer"]
+    "tags": ["gpt-4.1", "coding", "explainer"],
+    "price": [0.002, 0.008]
   },
   {
     "model": "o4-mini",
     "api_key": "KEY",
-    "tags": ["o4-mini", "coding", "explainer"]
+    "tags": ["o4-mini", "coding", "explainer"],
+    "price": [0.0006, 0.0024]
   },
   {
     "model": "o3-mini",
     "api_key": "KEY",
-    "tags": ["o3-mini", "coding", "explainer"]
+    "tags": ["o3-mini", "coding", "explainer"],
+    "price": [0.002, 0.008]
   }
 ]

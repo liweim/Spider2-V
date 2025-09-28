@@ -20,19 +20,44 @@ def setup():
     env.close()
 
 def sample():
-    data = json.load(open("evaluation_examples/test_non_account.json"))
-    sample_data = {}
+    # data = json.load(open("evaluation_examples/test_non_account.json"))
+    # sample_data = {}
+    # count = 0
+    # for domain, items in data.items():
+    #     if len(items) > 1:
+    #         sample_data[domain] = [items[0]]
+    #         count += 1
+    #         for item in items[1:]:
+    #             if random.random() < 0.1:   
+    #                 count += 1
+    #                 sample_data[domain].append(item)
+    # print(f"Sampled {count} items")
+    # json.dump(sample_data, open("evaluation_examples/test_small.json", "w"), indent=4)
+
+    data = json.load(open("evaluation_examples/test_account.json"))
+    sample_data = json.load(open("evaluation_examples/test_small.json"))
     count = 0
     for domain, items in data.items():
         if len(items) > 1:
-            sample_data[domain] = [items[0]]
-            count += 1
+            if domain not in sample_data:
+                sample_data[domain] = [items[0]]
+                count += 1
             for item in items[1:]:
                 if random.random() < 0.1:   
                     count += 1
                     sample_data[domain].append(item)
     print(f"Sampled {count} items")
     json.dump(sample_data, open("evaluation_examples/test_small.json", "w"), indent=4)
+
+    # data = json.load(open("evaluation_examples/test_account.json"))
+    # sample_data = {}
+    # count = 0
+    # for domain, items in data.items():
+    #     if len(items) > 1:
+    #         sample_data[domain] = [items[0]]
+    #         count += 1
+    # print(f"Sampled {count} items")
+    # json.dump(sample_data, open("evaluation_examples/check_account.json", "w"), indent=4)
 
 if __name__ == "__main__":
     # setup()

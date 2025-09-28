@@ -57,17 +57,19 @@ snowflake==0.7.0
 duckdb==0.10.1
 google-cloud-bigquery==3.14.1
 google-cloud-bigquery-connection==1.15.3
-dbt-cloud-cli
+dbt-cloud-cli==0.8.2
 nbformat==5.10.4
-browsergym-workarena==0.2.1
+browsergym
 groq
 llama_index
 llama-index-embeddings-huggingface
 
-pydantic>=2.0,<3.0
+# pydantic>=2.0,<3.0
+pydantic
 pydantic_core
 openai
 diskcache
 docker
 termcolor
 autogen
+ag2

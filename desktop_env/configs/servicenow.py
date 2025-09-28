@@ -1,5 +1,10 @@
 #coding=utf8
 import json, os
+settings_file = json.load(open('evaluation_examples/settings/servicenow/settings.json', 'r'))
+for key in settings_file:
+    if key.startswith('SNOW_'):
+        os.environ[key] = settings_file[key]
+
 import gymnasium as gym
 import logging
 import numpy as np
@@ -219,10 +224,6 @@ def workarena_task_init_setup(controller, **config):
     """
     listening_port = config.get('listening_port', 9222)
     remote_debugging_url = f"http://{controller.vm_ip}:{listening_port}"
-    settings_file = json.load(open(config.get('settings_file', 'evaluation_examples/settings/servicenow/settings.json'), 'r'))
-    for key in settings_file:
-        if key.startswith('SNOW_'):
-            os.environ[key] = settings_file[key]
 
     global WORKARENA_ENV
     if WORKARENA_ENV is not None:
