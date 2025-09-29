@@ -6,7 +6,7 @@
     "price": [0.0025, 0.005]
   },
   {
-    "model": "o3",
+    "model": "o3-2025-04-16",
     "api_key": "KEY",
     "tags": ["o3", "coding", "explainer"],
     "price": [0.001, 0.004]
@@ -18,7 +18,7 @@
     "price": [0.002, 0.008]
   },
   {
-    "model": "o4-mini",
+    "model": "o4-mini-2025-04-16",
     "api_key": "KEY",
     "tags": ["o4-mini", "coding", "explainer"],
     "price": [0.0006, 0.0024]
@@ -28,5 +28,11 @@
     "api_key": "KEY",
     "tags": ["o3-mini", "coding", "explainer"],
     "price": [0.002, 0.008]
+  },
+  {
+    "model": "computer-use-preview",
+    "api_key": "KEY",
+    "tags": ["computer-use-preview", "cua"],
+    "price": [0.003, 0.012]
   }
 ]

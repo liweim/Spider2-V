@@ -7,13 +7,13 @@ import os
 import logging
 from configs.config import OPENAI_API_KEY
 from pydantic import SecretStr
-import argparse
 from mm_agents.coact.autogen import LLMConfig
 from desktop_env.envs.desktop_env import DesktopEnv
 from mm_agents.coact.autogen.agentchat.contrib.multimodal_conversable_agent import MultimodalConversableAgent
 from mm_agents.coact.autogen.code_utils import PYTHON_VARIANTS
 from mm_agents.coact.cua_agent import call_openai_cua, _cua_to_pyautogui
 from openai import OpenAI
+from utils import serialize_json
 
 
 # ==================== COORDINATOR AGENT ====================
@@ -119,13 +119,15 @@ class OperatorAgent:
         client_password: str = "",
         screen_width: int = 1920,
         screen_height: int = 1080,
-        sleep_after_execution: float = 0.5
+        sleep_after_execution: float = 0.5,
+        operator_model: str = "computer-use-preview"
     ):
         self.client = OpenAI()
         self.client_password = client_password
         self.screen_width = screen_width
         self.screen_height = screen_height
         self.sleep_after_execution = sleep_after_execution
+        self.operator_model = operator_model
         
     def execute_single_action(
         self, 
@@ -184,11 +186,12 @@ Analyze the current screenshot and execute the requested GUI operation."""
         
         try:
             # Call OpenAI computer use API for single action
-            response, cost = call_openai_cua(
+            response, cost, input_tokens, output_tokens = call_openai_cua(
                 self.client, 
                 history_inputs, 
                 self.screen_width, 
-                self.screen_height
+                self.screen_height,
+                model=self.operator_model
             )
             
             # Process response
@@ -226,9 +229,11 @@ Analyze the current screenshot and execute the requested GUI operation."""
         except Exception as e:
             reasoning = f"Error during GUI operation: {str(e)}"
             cost = 0.0
+            input_tokens = 0
+            output_tokens = 0
             logger.error(f"Operator error: {e}")
         
-        return reasoning, cost
+        return reasoning, cost, input_tokens, output_tokens
 
 
 class MyAgentFramework:
@@ -239,8 +244,9 @@ class MyAgentFramework:
     
     def __init__(
         self,
-        coordinator_model: str = "o3",
+        coordinator_model: str = "o3-2025-04-16",
         operator_client_password: str = "",
+        operator_model: str = "computer-use-preview",
         screen_width: int = 1920,
         screen_height: int = 1080,
         sleep_after_execution: float = 0.5,
@@ -263,6 +269,7 @@ class MyAgentFramework:
         
         self.operator = OperatorAgent(
             client_password=operator_client_password,
+            operator_model=operator_model,
             screen_width=screen_width,
             screen_height=screen_height,
             sleep_after_execution=sleep_after_execution
@@ -273,6 +280,11 @@ class MyAgentFramework:
         self.history_save_dir = history_save_dir
         self.total_steps = 0
         self.action_logs = []  # Unified action log list
+        self.coordinator_model = coordinator_model
+        self.operator_model = operator_model
+        
+        # Track usage by model
+        self.model_usage = {}
         
         # Environment will be set during task execution
         self.env = None
@@ -294,7 +306,6 @@ class MyAgentFramework:
         
     def execute_task(
         self,
-        task_kwargs: dict,
         task_config: dict,
         additional_context: Optional[str] = None
     ) -> Tuple[float, List[dict]]:
@@ -408,7 +419,7 @@ class MyAgentFramework:
             self.total_steps += 1
             
             # Execute single GUI action
-            result, cost = self.operator.execute_single_action(
+            result, cost, input_tokens, output_tokens = self.operator.execute_single_action(
                 env=self.env,
                 task=task,
                 context=context,
@@ -424,9 +435,17 @@ class MyAgentFramework:
                 "context": context,
                 "result": result,
                 "cost": cost,
+                "model": self.operator_model,
                 "screenshot": f"step_{self.total_steps}_gui.png"
             }
             self.action_logs.append(action_log)
+            
+            # Update model-specific usage
+            if self.operator_model not in self.model_usage:
+                self.model_usage[self.operator_model] = {"cost": 0.0, "prompt_tokens": 0, "completion_tokens": 0}
+            self.model_usage[self.operator_model]["cost"] += cost
+            self.model_usage[self.operator_model]["prompt_tokens"] += input_tokens
+            self.model_usage[self.operator_model]["completion_tokens"] += output_tokens
             
             # Get current screenshot after action
             screenshot = self.env.controller.get_screenshot()
@@ -466,30 +485,21 @@ class MyAgentFramework:
                 
                 chat_history.append(cleaned_item)
         
-        # Create unified execution log combining chat history and actions
-        unified_log = {
-            "task_config": task_config,
-            "settings": task_kwargs,
-            "additional_context": additional_context,
-            "chat_history": chat_history,
-            "action_logs": self.action_logs,
-            "statistics": {
-                "total_steps": self.total_steps,
-                "gui_operations": len([log for log in self.action_logs if log["type"] == "gui_operator"]),
-                "code_executions": len([log for log in self.action_logs if log["type"] == "code_execution"]),
-                "total_cost": sum(log.get("cost", 0) for log in self.action_logs)
-            }
-        }
+        # Get token usage from coordinator
+        coordinator_usage = self.coordinator.get_total_usage()
+        coordinator_prompt_tokens = coordinator_usage.get('prompt_tokens', 0)
+        coordinator_completion_tokens = coordinator_usage.get('completion_tokens', 0)
+        coordinator_cost = coordinator_usage.get('cost', 0.0)
+
+        if self.coordinator_model not in self.model_usage:
+            self.model_usage[self.coordinator_model] = {"cost": 0.0, "prompt_tokens": 0, "completion_tokens": 0}
+        self.model_usage[self.coordinator_model]["prompt_tokens"] += coordinator_prompt_tokens
+        self.model_usage[self.coordinator_model]["completion_tokens"] += coordinator_completion_tokens
+        self.model_usage[self.coordinator_model]["cost"] += coordinator_cost
         
-        # Save unified execution log
-        with open(os.path.join(self.history_save_dir, "execution_log.json"), "w") as f:
-            json.dump(unified_log, f, indent=2)
-        
-        # Count steps for reporting (now from unified directory)
-        operations_dir = os.path.join(self.history_save_dir, "operations")
-        gui_steps = len(glob.glob(f"{operations_dir}/step_*_gui.png"))
-        code_steps = len(glob.glob(f"{operations_dir}/step_*_code.png"))
-        total_operation_steps = gui_steps + code_steps
+        # Calculate totals
+        prompt_tokens = self.model_usage[self.coordinator_model]["prompt_tokens"] + self.model_usage[self.operator_model]["prompt_tokens"]
+        completion_tokens = self.model_usage[self.coordinator_model]["completion_tokens"] + self.model_usage[self.operator_model]["completion_tokens"]
         
         # Evaluate task completion
         try:
@@ -497,16 +507,38 @@ class MyAgentFramework:
         except Exception as e:
             logging.getLogger("desktopenv").error(f"Evaluation error: {e}")
             score = 0.0
-        
-        total_cost = sum(log.get("cost", 0) for log in self.action_logs)
-        gui_operations = len([log for log in self.action_logs if log["type"] == "gui_operator"])
+
+        total_cost = self.model_usage[self.coordinator_model]["cost"] + self.model_usage[self.operator_model]["cost"]
+        cua_steps = len([log for log in self.action_logs if log["type"] == "gui_operator"])
         code_operations = len([log for log in self.action_logs if log["type"] == "code_execution"])
         
         print(f"Score: {score}")
-        print(f"Total operations: {gui_operations + code_operations} (GUI: {gui_operations}, Code: {code_operations})")
+        print(f"Total operations: {cua_steps + code_operations} (GUI: {cua_steps}, Code: {code_operations})")
         print(f"Total cost: ${total_cost:.4f}")
+
+        # Create unified execution log combining chat history and actions
+        unified_log = {
+            "statistics": {
+                "score": score,
+                "total_steps": self.total_steps,
+                "cua_steps": cua_steps,
+                "coding_steps": code_operations,
+                "total_cost": total_cost,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "model_usage": self.model_usage
+            },
+            "task_config": task_config,
+            "additional_context": additional_context,
+            "chat_history": chat_history,
+            "action_logs": self.action_logs
+        }
         
-        return score, chat_history
+        # Save unified execution log
+        with open(os.path.join(self.history_save_dir, "execution_log.json"), "w") as f:
+            json.dump(serialize_json(unified_log), f, indent=2)
+
+        return score
     
     def cleanup(self):
         """Clean up resources."""

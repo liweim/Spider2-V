@@ -8,11 +8,9 @@ from typing import Any, Dict, List, Tuple
 import openai
 from desktop_env.envs.desktop_env import DesktopEnv
 from openai import OpenAI  # pip install --upgrade openai>=1.66.2
+from configs.config import OPENAI_API_KEY
 
 logger = logging.getLogger("desktopenv")
-
-GPT4O_INPUT_PRICE_PER_1M_TOKENS = 3.00
-GPT4O_OUTPUT_PRICE_PER_1M_TOKENS = 12.00
 
 PROMPT_TEMPLATE = """# Task
 {instruction}
@@ -105,13 +103,19 @@ def call_openai_cua(client: OpenAI,
                     history_inputs: list,
                     screen_width: int = 1920,
                     screen_height: int = 1080,
-                    environment: str = "linux") -> Tuple[Any, float]:
+                    environment: str = "linux",
+                    model: str = "computer-use-preview") -> Tuple[Any, float, int, int]:
     retry = 0
     response = None
+    llm_configs = json.load(open("mm_agents/coact/OAI_CONFIG_LIST", "r"))
+    llm_config = next((config for config in llm_configs if config["model"] == model), None)
+    if not llm_config:
+        raise ValueError(f"Model {model} not found in OAI_CONFIG_LIST")
+    
     while retry < 1:
         try:
             response = client.responses.create(
-                model="computer-use-preview",
+                model=model,
                 tools=[{
                     "type": "computer_use_preview",
                     "display_width": screen_width,
@@ -138,14 +142,16 @@ def call_openai_cua(client: OpenAI,
         raise Exception("Failed to call OpenAI.")
 
     cost = 0.0
+    input_tokens = 0
+    output_tokens = 0
     if response and hasattr(response, "usage") and response.usage:
         input_tokens = response.usage.input_tokens
         output_tokens = response.usage.output_tokens
-        input_cost = (input_tokens / 1_000_000) * GPT4O_INPUT_PRICE_PER_1M_TOKENS
-        output_cost = (output_tokens / 1_000_000) * GPT4O_OUTPUT_PRICE_PER_1M_TOKENS
+        input_cost = input_tokens * llm_config["price"][0] / 1000
+        output_cost = output_tokens * llm_config["price"][1] / 1000
         cost = input_cost + output_cost
 
-    return response, cost
+    return response, cost, input_tokens, output_tokens
 
 
 def run_cua(
@@ -158,8 +164,9 @@ def run_cua(
     sleep_after_execution: float = 0.3,
     truncate_history_inputs: int = 100,
     client_password: str = "",
-) -> Tuple[str, float]:
-    client = OpenAI()
+    model: str = "computer-use-preview",
+) -> Tuple[List, str, float, int, int]:
+    client = OpenAI(api_key=OPENAI_API_KEY)
 
     # 0 / reset & first screenshot
     logger.info(f"Instruction: {instruction}")
@@ -175,8 +182,10 @@ def run_cua(
         ],
     }]
 
-    response, cost = call_openai_cua(client, history_inputs, screen_width, screen_height)
+    response, cost, input_tokens, output_tokens = call_openai_cua(client, history_inputs, screen_width, screen_height, model=model)
     total_cost = cost
+    total_input_tokens = input_tokens
+    total_output_tokens = output_tokens
     logger.info(f"Cost: ${cost:.6f} | Total Cost: ${total_cost:.6f}")
     step_no = 0
     
@@ -323,8 +332,10 @@ def run_cua(
                     
                     history_inputs.insert(insert_pos, missing_item)
 
-        response, cost = call_openai_cua(client, history_inputs, screen_width, screen_height)
+        response, cost, input_tokens, output_tokens = call_openai_cua(client, history_inputs, screen_width, screen_height, model=model)
         total_cost += cost
+        total_input_tokens += input_tokens
+        total_output_tokens += output_tokens
         logger.info(f"Cost: ${cost:.6f} | Total Cost: ${total_cost:.6f}")
     
     # 更新：发送Esc键到虚拟机关闭临时窗口
@@ -333,9 +344,10 @@ def run_cua(
     obs, *_ = env.step(esc_cmd, sleep_after_execution)
 
     logger.info(f"Total cost for the task: ${total_cost:.4f}")
+    logger.info(f"Total tokens: {total_input_tokens + total_output_tokens} (input: {total_input_tokens}, output: {total_output_tokens})")
     history_inputs[0]['content'][1]['image_url'] = "<image>"
     for item in history_inputs:
         if item.get('type', None) == 'computer_call_output':
             item['output']['image_url'] = "<image>"
-    return history_inputs, reasoning, total_cost
+    return history_inputs, reasoning, total_cost, total_input_tokens, total_output_tokens
 

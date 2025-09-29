@@ -4,10 +4,10 @@ Utils and basic architecture credit to https://github.com/web-arena-x/webarena/b
 import argparse, datetime, json, logging, os, shutil, sys
 from tqdm import tqdm
 import lib_run_single
-from typing import List, Tuple, Dict, Any, Optional
+from typing import List, Tuple, Dict, Any, Optional 
 from desktop_env.envs.desktop_env import DesktopEnv
 from mm_agents.agent import PromptAgent
-from utils import build_additional_contexts
+from utils import build_additional_contexts, summary, save_args_to_settings
 
 #  Logger Configs {{{ #
 logger = logging.getLogger()
@@ -78,6 +78,9 @@ def config() -> argparse.Namespace:
 
     # example config
     parser.add_argument('-e', "--example", type=str, default=os.path.join('evaluation_examples', 'test_one.json'), help="JSON dict containing example ids to run")
+    parser.add_argument(
+        "--test_config_base_dir", type=str, default="evaluation_examples/examples"
+    )
     parser.add_argument("--exclude_account", action='store_true')
     parser.add_argument("--execution_feedback", action='store_true', help="whether to use execution feedback for the agent")
     parser.add_argument("--rag", action='store_true', help="Whether to use RAG for the agent")
@@ -87,8 +90,10 @@ def config() -> argparse.Namespace:
     parser.add_argument("--domains", choices=ALL_DOMAINS + ['all'], nargs='+', default=["all"], help="Application names list to filter examples")
 
     # logging related
-    parser.add_argument("--result_dir", type=str, default="./results")
-    parser.add_argument("--from_scratch", action="store_true", help="Run from scratch, ignore existing results")
+    parser.add_argument("--result_dir", type=str, default="./results/som_gpt_4o_rag_ef")
+    parser.add_argument("--rerun", action="store_true", help="Rerun tests that have already been run")
+    parser.add_argument("--rerun_fail", action="store_true", help="Rerun failed tests")
+    parser.add_argument("--get_score", action="store_true", help="Get scores")
     args = parser.parse_args()
 
     if args.observation_space == 'som':
@@ -142,12 +147,12 @@ def test(args: argparse.Namespace, test_all_meta: List[dict]) -> dict:
         
         example['context'] = additional_context
 
-        root_logger = logging.getLogger()
-        example_handler = logging.FileHandler(os.path.join(result_dir, "result-{:}.log".format(datetime_str)), encoding="utf-8")
-        example_handler.setLevel(logging.INFO)
-        example_handler.setFormatter(pure_formatter)
-        example_handler.addFilter(logging.Filter("desktopenv"))
-        root_logger.addHandler(example_handler)
+        # root_logger = logging.getLogger()
+        # example_handler = logging.FileHandler(os.path.join(result_dir, "result-{:}.log".format(datetime_str)), encoding="utf-8")
+        # example_handler.setLevel(logging.INFO)
+        # example_handler.setFormatter(pure_formatter)
+        # example_handler.addFilter(logging.Filter("desktopenv"))
+        # root_logger.addHandler(example_handler)
 
         logger.info(f"[Domain]: {domain}")
         logger.info(f"[Example id]: {eid}")
@@ -161,56 +166,23 @@ def test(args: argparse.Namespace, test_all_meta: List[dict]) -> dict:
         except Exception as e: # do not record in this case
             logger.error(f"Exception in {domain}/{eid}: {e}")
             # env.controller.end_recording(os.path.join(result_dir, "recording.mp4"))
-            with open(os.path.join(result_dir, "trajectory.jsonl"), "a") as f:
-                f.write(json.dumps({
-                    "Error": f"Error msg in {domain}/{eid}: {e}"
-                }))
-                f.write("\n")
+            # with open(os.path.join(result_dir, "trajectory.jsonl"), "a") as f:
+            #     f.write(json.dumps({
+            #         "Error": f"Error msg in {domain}/{eid}: {e}"
+            #     }))
+            #     f.write("\n")
 
-        root_logger.removeHandler(example_handler)
-        example_handler.close()
+        # root_logger.removeHandler(example_handler)
+        # example_handler.close()
 
     env.close()
     return scores
 
-
-def get_result_dir(args):
-    """ Method to define the unique result directory for the current experiment. For example, the result directory is `results/pyautogui_a11y_tree_gpt-4o-2024-05-13`, and the example directory is `results/pyautogui_a11y_tree_gpt-4o-2024-05-13/dbt/4d2e1-34e134-rfqe32/` for example id `4d2e1-34e134-rfqe32` under tool `dbt`. And the following files will be saved:
-    - `trajectory.jsonl`: trajectory information for each step
-    - `result.txt`: evaluation result for the example, this is also an indicator of whether the example is finished (see func `get_examples`)
-    - `log.txt`: log message when running the example
-    - `recording.mp4`: recording video for the example
-    - `screenshots/`: directory containing all screenshots for each step if observation space contains screenshot
-        - `step_1_2021-01-01@12:00:00.png`
-    - `a11y_trees/`: directory containing all a11y trees for each step if observation space contains a11y tree
-        - `step_1_2021-01-01@12:00:00.txt`
-    """
-    result_dir = f"{args.action_space}_{args.observation_space}_{args.model}"
-    if args.rag:
-        result_dir += '_rag'
-        if not args.rag_filename.endswith('txt'):
-            suffix = os.path.splitext(args.rag_filename)[1]
-            result_dir += suffix
-    if args.execution_feedback:
-        result_dir += '_ef'
-    # result_dir += f"_temp{args.temperature}_traj{args.max_trajectory_length}"
-    return os.path.join(args.result_dir, result_dir)
-
-def save_args_to_settings(args, result_dir):
-    """Save args to settings.txt in the result subdirectory"""
-    os.makedirs(result_dir, exist_ok=True)
-    settings_file = os.path.join(result_dir, "settings.txt")
-    
-    with open(settings_file, "w", encoding="utf-8") as f:
-        args_dict = vars(args)
-        for key, value in sorted(args_dict.items()):
-            f.write(f"{key} = {value}\n")
-
-def get_examples(args, result_dir: str, easy_first: bool = True) -> List[Dict[str, str]]:
+def get_examples(args, test_all_meta, easy_first: bool = True) -> List[Dict[str, str]]:
     """ Get [Filter] the list of example dict for the current experiment.
     # Filter method:
-    - args.from_scratch (bool): if True, ignore existing results in result.txt, otherwise,
-        only test examples that are unfinished under the result directory
+    - args.rerun (bool): if True, rerun tests that have already been run
+    - args.rerun_fail (bool): if True, rerun failed tests
     - args.domains (List[str]): if not contain "all", only include examples under the specified domains
     - args.exclude_account (bool): if True, exclude examples that are related to real accounts
     - easy_first (bool): if True, sort examples that are easy to run first (smaller action_number)
@@ -222,47 +194,41 @@ def get_examples(args, result_dir: str, easy_first: bool = True) -> List[Dict[st
         - result: path to the result directory for the example
             note that, the result directory will also be reset implicitly
     """
-    def file_not_empty(fp):
-        with open(fp, 'r') as f:
-            content = f.read().strip()
-            return len(content) > 0
 
     examples_to_run = []
-    data_dir = os.path.join("evaluation_examples", "examples")
-    filtered_domain = ALL_DOMAINS if 'all' in args.domains else args.domains
-    test_data = json.load(open(args.example, 'r'))
-    for domain in os.listdir(data_dir):
-        if domain not in filtered_domain or domain not in test_data: continue
-        domain_dir = os.path.join(data_dir, domain)
-        domain_result_dir = os.path.join(result_dir, domain)
-        os.makedirs(domain_result_dir, exist_ok=True)
-
-        for example_id in test_data[domain]:
-            example_dir = os.path.join(domain_dir, example_id)
-            if not os.path.isdir(example_dir): continue
-
-            example_result_dir = os.path.join(domain_result_dir, example_id)
-            result_file = os.path.join(example_result_dir, "result.txt")
-            if not args.from_scratch and os.path.exists(result_file) and file_not_empty(result_file): continue
-            data_config = os.path.join(example_dir, f"{example_id}.json")
-            data = json.load(open(data_config, 'r'))
-            if args.exclude_account and 'account' in data['tags']: continue
-
-            # remove the result directory if exists
-            shutil.rmtree(example_result_dir, ignore_errors=True)
-            os.makedirs(example_result_dir, exist_ok=True)
-            if args.observation_space != "a11y_tree":
-                os.makedirs(os.path.join(example_result_dir, "screenshots"), exist_ok=True)
-            if args.observation_space != "screenshot":
-                os.makedirs(os.path.join(example_result_dir, "a11y_trees"), exist_ok=True)
-            example = {
-                "id": example_id,
-                "domain": domain,
-                "config": data_config,
-                "result": example_result_dir,
-                "action_number": data["action_number"]
-            }
-            examples_to_run.append(example)
+    for domain in test_all_meta:
+        for ex_id in test_all_meta[domain]:
+            target_dir = os.path.join(args.result_dir, f"{domain}/{ex_id}")
+            result_path = os.path.join(target_dir, 'result.txt')
+            cfg = os.path.join(args.test_config_base_dir, f"{domain}/{ex_id}/{ex_id}.json")
+            
+            # Check if we should skip this task
+            should_skip = False
+            if not args.rerun and os.path.exists(result_path) and not os.path.exists(os.path.join(target_dir, 'err_reason.txt')):
+                result = float(open(result_path, 'r').read())
+                print(f"Results already exist in {domain}/{ex_id}, result: {result}")
+                
+                # Skip successful tasks, or skip failed tasks if not rerun_fail
+                if result > 0.0 or not args.rerun_fail:
+                    should_skip = True
+            
+            if not should_skip:
+                # Clean up existing directory and add to tasks
+                if os.path.exists(target_dir):
+                    shutil.rmtree(target_dir)
+                os.makedirs(target_dir, exist_ok=True)
+                if args.observation_space != "a11y_tree":
+                    os.makedirs(os.path.join(target_dir, "screenshots"), exist_ok=True)
+                if args.observation_space != "screenshot":
+                    os.makedirs(os.path.join(target_dir, "a11y_trees"), exist_ok=True)
+                example = {
+                    "id": ex_id,
+                    "domain": domain,
+                    "config": cfg,
+                    "result": target_dir,
+                    "action_number":  json.load(open(cfg, 'r'))["action_number"]
+                }
+                examples_to_run.append(example)
 
     logger.info(f"Total examples to run: {len(examples_to_run)}")
     if easy_first:
@@ -270,37 +236,15 @@ def get_examples(args, result_dir: str, easy_first: bool = True) -> List[Dict[st
     return examples_to_run
 
 
-def get_result(result_dir: dict) -> str:
-    """ Get existing results.
-    """
-    all_result = {}
-    for domain in os.listdir(result_dir):
-        domain_path = os.path.join(result_dir, domain)
-        if not os.path.isdir(domain_path): continue
-        if domain not in all_result:
-            all_result[domain] = []
-        for example_id in os.listdir(domain_path):
-            example_path = os.path.join(domain_path, example_id)
-            if not os.path.isdir(example_path): continue
-            if "result.txt" in os.listdir(example_path):
-                all_result[domain].append(float(open(os.path.join(example_path, "result.txt"), "r").read()))
-    total = sum([len(all_result[domain]) for domain in all_result])
-    if total == 0:
-        return "New experiment, no result yet."
-    else:
-        total_success = sum([sum(all_result[domain]) for domain in all_result])
-        msg = f"Current Success Rate: {total_success} / {total} = { total_success / total * 100:.2f}%"
-        return msg
-
-
 if __name__ == '__main__':
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
     args = config()
 
-    result_dir = get_result_dir(args)
-    save_args_to_settings(args, result_dir)
-    examples = get_examples(args, result_dir)
+    save_args_to_settings(args, args.result_dir)
+    test_all_meta = json.load(open(args.example, 'r'))
+    examples = get_examples(args, test_all_meta)
 
-    logger.info(f"Old result before running:\n{get_result(result_dir)}")
-    test(args, examples)
-    logger.info(f"New result after running:\n{get_result(result_dir)}")
+    if not args.get_score:
+        test(args, examples)
+    
+    summary(args, test_all_meta)

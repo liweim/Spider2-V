@@ -17,7 +17,7 @@ import sys
 from configs.config import OPENAI_API_KEY
 from pydantic import SecretStr
 import numpy as np
-from utils import build_additional_contexts
+from utils import build_additional_contexts, summary, serialize_json, save_args_to_settings
 
 
 TASK_DESCRIPTION = """# Your role
@@ -68,13 +68,13 @@ def config() -> argparse.Namespace:
 
     # agent config
     parser.add_argument("--oai_config_path", type=str, default="mm_agents/coact/OAI_CONFIG_LIST")
-    parser.add_argument("--orchestrator_model", type=str, default="o3")
-    parser.add_argument("--coding_model", type=str, default="o4-mini")
+    parser.add_argument("--orchestrator_model", type=str, default="o3-2025-04-16")
+    parser.add_argument("--coding_model", type=str, default="o4-mini-2025-04-16")
     parser.add_argument("--cua_model", type=str, default="computer-use-preview")
     parser.add_argument("--orchestrator_max_steps", type=int, default=15) #15
-    parser.add_argument("--coding_max_steps", type=int, default=10) #20
-    parser.add_argument("--cua_max_steps", type=int, default=10) #25
-    parser.add_argument("--cut_off_steps", type=int, default=20) #200
+    parser.add_argument("--coding_max_steps", type=int, default=20) #20
+    parser.add_argument("--cua_max_steps", type=int, default=25) #25
+    parser.add_argument("--cut_off_steps", type=int, default=50) #200
 
     # example config
     parser.add_argument("--domain", type=str, default="all")
@@ -143,22 +143,12 @@ logger.addHandler(stdout_handler)
 
 logger = logging.getLogger("desktopenv.expeiment")
 
-
-def save_args_to_settings(args, result_dir):
-    """Save args to settings.txt in the result subdirectory"""
-    os.makedirs(result_dir, exist_ok=True)
-    settings_file = os.path.join(result_dir, "settings.txt")
-    
-    with open(settings_file, "w", encoding="utf-8") as f:
-        args_dict = vars(args)
-        for key, value in sorted(args_dict.items()):
-            f.write(f"{key} = {value}\n")
-
 def process_task(task_info, 
                 path_to_vm,
                 snapshot_name="init_state",
                 orchestrator_model="o3",
-                coding_model='o4-mini',
+                coding_model='o4-mini-2025-04-16',
+                cua_model='computer-use-preview',
                 result_dir='results/coact',
                 orchestrator_max_steps=15,
                 cua_max_steps=25,
@@ -186,9 +176,6 @@ def process_task(task_info,
         config_item.api_key = SecretStr(OPENAI_API_KEY)
     
     history_save_dir = os.path.join(result_dir, f"{domain}/{ex_id}")
-    if not os.path.exists(history_save_dir):
-        os.makedirs(history_save_dir)
-    
     task_config = json.load(open(cfg))
     
     # Build context using the common function
@@ -220,6 +207,7 @@ def process_task(task_info,
                 code_execution_config=False,
                 history_save_dir=history_save_dir,
                 llm_model=coding_model,
+                cua_model=cua_model,
                 truncate_history_inputs=cua_max_steps + 1,
                 cua_max_steps=cua_max_steps,
                 coding_max_steps=coding_max_steps,
@@ -258,8 +246,8 @@ def process_task(task_info,
                         msg['image_url'] = "<image>"
             chat_history.append(item)
         
-        with open(os.path.join(history_save_dir, f'chat_history.json'), "w") as f:
-            json.dump(chat_history, f)
+        # with open(os.path.join(history_save_dir, f'chat_history.json'), "w") as f:
+        #     json.dump(chat_history, f)
 
         if chat_history[-1]['role'] == 'user' and 'INFEASIBLE' in chat_history[-1]['content'][0]['text']:
             orchestrator_proxy.env.action_history.append("FAIL")
@@ -271,20 +259,72 @@ def process_task(task_info,
             with open(hist, 'r') as f:
                 hist = json.dumps(json.load(f))
                 coding_steps += hist.count('exitcode:')
-        # 更新：cut_off_steps已经更新到orchestrator_proxy
-        # if cua_steps + coding_steps > cut_off_steps:
-        #     score = 0.0
-        # else:
-        #     score = orchestrator_proxy.env.evaluate()
         score = orchestrator_proxy.env.evaluate()
-        print(f"Score: {score}")
         
+        cua_usage = orchestrator_proxy.model_usage.get(cua_model, {})
+        cua_prompt_tokens = cua_usage.get('prompt_tokens', 0)
+        cua_completion_tokens = cua_usage.get('completion_tokens', 0)
+        cua_cost = cua_usage.get('cost', 0.0)
+        coding_usage = orchestrator_proxy.model_usage.get(coding_model, {})
+        coding_prompt_tokens = coding_usage.get('prompt_tokens', 0)
+        coding_completion_tokens = coding_usage.get('completion_tokens', 0)
+        coding_cost = coding_usage.get('cost', 0.0)
+        
+        orchestrator_usage = orchestrator.get_total_usage().get(orchestrator_model, {})
+        orchestrator_prompt_tokens = orchestrator_usage.get('prompt_tokens', 0)
+        orchestrator_completion_tokens = orchestrator_usage.get('completion_tokens', 0)
+        orchestrator_cost = orchestrator_usage.get('cost', 0.0)
+        
+        # Combine token usage from both agents
+        prompt_tokens = orchestrator_prompt_tokens + cua_prompt_tokens + coding_prompt_tokens
+        completion_tokens = orchestrator_completion_tokens + cua_completion_tokens + coding_completion_tokens
+        total_cost = orchestrator_cost + cua_cost + coding_cost
+        
+        # Create model usage breakdown
+        model_usage_breakdown = {}
+        model_usage_breakdown["orchestrator"] = {
+            "cost": orchestrator_cost,
+            "prompt_tokens": orchestrator_prompt_tokens,
+            "completion_tokens": orchestrator_completion_tokens
+        }
+        model_usage_breakdown["cua"] = {
+            "cost": cua_cost,
+            "prompt_tokens": cua_prompt_tokens,
+            "completion_tokens": cua_completion_tokens
+        }
+        model_usage_breakdown["coding"] = {
+            "cost": coding_cost,
+            "prompt_tokens": coding_prompt_tokens,
+            "completion_tokens": coding_completion_tokens
+        }
+        
+        unified_log = {
+            "statistics": {
+                "score": score,
+                "total_steps": cua_steps + coding_steps,
+                "cua_steps": cua_steps,
+                "coding_steps": coding_steps,
+                "total_cost": total_cost,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "model_usage": model_usage_breakdown
+            },
+            "task_config": task_config,
+            "additional_context": additional_context,
+            "chat_history": chat_history,
+            "action_logs": orchestrator_proxy.action_logs
+        }
+        
+        # Save unified execution log
+        with open(os.path.join(history_save_dir, "execution_log.json"), "w") as f:
+            json.dump(serialize_json(unified_log), f, indent=2)
+        
+        print(f"Score: {score}")
         with open(os.path.join(history_save_dir, f'result.txt'), "w") as f:
             f.write(str(score))
         
         if orchestrator_proxy.env is not None:
             orchestrator_proxy.env.close()
-            # orchestrator_proxy.env.clean_lock("./vmware_vm_data")
                 
     except Exception as e:
         print(f"Error processing task {domain}/{ex_id}")
@@ -310,7 +350,6 @@ if __name__ == "__main__":
         tasks = []
         scores: Dict[str, List[float]] = {}
         
-        # Save args to settings.txt
         save_args_to_settings(args, args.result_dir)
         
         # Process each domain and example
@@ -335,6 +374,7 @@ if __name__ == "__main__":
                     # Clean up existing directory and add to tasks
                     if os.path.exists(target_dir):
                         shutil.rmtree(target_dir)
+                    os.makedirs(target_dir, exist_ok=True)
                     tasks.append((domain, ex_id, cfg))
 
         # Check if there are any tasks to process
@@ -364,6 +404,7 @@ if __name__ == "__main__":
                                 snapshot_name=args.snapshot_name,
                                 result_dir=args.result_dir,
                                 coding_model=args.coding_model,
+                                cua_model=args.cua_model,
                                 orchestrator_model=args.orchestrator_model,
                                 config_path=args.oai_config_path, 
                                 orchestrator_max_steps=args.orchestrator_max_steps,
@@ -396,26 +437,6 @@ if __name__ == "__main__":
                     avg_score = sum(scores[domain]) / len(scores[domain])
                     print(f"{domain}: {len(scores[domain])} tasks, average score: {avg_score:.2%}")
     
-    all_scores = []
-    count_remain = 0
-    scores = {}
-    for domain in test_all_meta:
-        scores[domain] = []
-        for ex_id in test_all_meta[domain]:
-            score_file = os.path.join(args.result_dir, f"{domain}/{ex_id}/result.txt")
-            if os.path.exists(score_file):
-                with open(score_file, "r") as f:
-                    score = eval(f.read())
-                    all_scores.append(score)
-                    scores[domain].append(score)
-            else:
-                all_scores.append(0.0)
-                scores[domain].append(0.0)
-                count_remain += 1
-    print('=== Overall Results ===')
-    for domain in scores:
-        if scores[domain]:
-            avg_score = sum(scores[domain]) / len(scores[domain])
-            print(f"{domain}: {len(scores[domain])} tasks, average score: {avg_score:.2%}")
-    all_avg_score = np.mean(all_scores)
-    print(f"All average score: {all_avg_score:.2%}, tasks remain: {count_remain}")
+    summary(args, test_all_meta)
+
+

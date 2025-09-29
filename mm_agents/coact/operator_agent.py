@@ -162,7 +162,8 @@ class OrchestratorUserProxyAgent(MultimodalConversableAgent):
         coding_max_steps: int = 30,
         cut_off_steps: int = 200,
         history_save_dir: str = "",
-        llm_model: str = "o4-mini",
+        llm_model: str = "o4-mini-2025-04-16",
+        cua_model: str = "computer-use-preview",
         client_password: str = "",
         user_instruction: str = "",
         headless: bool = False,
@@ -216,8 +217,17 @@ class OrchestratorUserProxyAgent(MultimodalConversableAgent):
         self.cua_max_steps = cua_max_steps
         self.coding_max_steps = coding_max_steps
         self.cut_off_steps = cut_off_steps
-        self.llm_config = llm_config
+        # self.llm_config = llm_config
         self.llm_model = llm_model
+        self.cua_model = cua_model
+        llm_configs = json.load(open("mm_agents/coact/OAI_CONFIG_LIST", "r"))
+        self.llm_config = next((config for config in llm_configs if config["model"] == llm_model), None)
+        
+        # Add statistics tracking
+        self.action_logs = []  # Unified action log list
+        
+        # Track usage by model
+        self.model_usage = {}
 
     def reset(self, task_config: dict[str, Any]):
         obs = self.env.reset(task_config=task_config)
@@ -267,7 +277,7 @@ class OrchestratorUserProxyAgent(MultimodalConversableAgent):
         if not os.path.exists(cua_path):
             os.makedirs(cua_path)
         try:
-            history_inputs, result, cost = run_cua(self.env,
+            history_inputs, result, cost, input_tokens, output_tokens = run_cua(self.env,
                                                    task,
                                                    save_path=cua_path,
                                                    max_steps=self.cua_config["max_steps"],
@@ -275,7 +285,8 @@ class OrchestratorUserProxyAgent(MultimodalConversableAgent):
                                                    screen_height=screen_height,
                                                    sleep_after_execution=self.cua_config["sleep_after_execution"],
                                                    truncate_history_inputs=self.cua_config["truncate_history_inputs"],
-                                                   client_password=self.client_password
+                                                   client_password=self.client_password,
+                                                   model=self.cua_model
                                                    )
             screenshot = self.env.controller.get_screenshot()
 
@@ -285,6 +296,27 @@ class OrchestratorUserProxyAgent(MultimodalConversableAgent):
                 f.write(result)
             with open(os.path.join(cua_path, "cost.txt"), "w") as f:
                 f.write(str(cost))
+            
+            # Record action log for statistics
+            action_log = {
+                "call_index": self.cua_call_count,
+                "type": "gui_operator",
+                "task": task,
+                "result": result,
+                "cost": cost,
+                "steps": len(glob.glob(f"{cua_path}/step_*.png")),
+                "save_path": cua_path,
+                "model": self.cua_model,
+            }
+            self.action_logs.append(action_log)
+            
+            # Update model-specific usage
+            if self.cua_model not in self.model_usage:
+                self.model_usage[self.cua_model] = {"cost": 0.0, "prompt_tokens": 0, "completion_tokens": 0}
+            self.model_usage[self.cua_model]["cost"] += cost
+            self.model_usage[self.cua_model]["prompt_tokens"] += input_tokens
+            self.model_usage[self.cua_model]["completion_tokens"] += output_tokens
+            
             self.cua_call_count += 1
 
         except Exception:
@@ -342,8 +374,35 @@ class OrchestratorUserProxyAgent(MultimodalConversableAgent):
             if not os.path.exists(os.path.join(self.history_save_dir, f'coding_output_{self.coding_call_count}')):
                 os.makedirs(os.path.join(self.history_save_dir, f'coding_output_{self.coding_call_count}'))
                 
-            with open(os.path.join(self.history_save_dir, f'coding_output_{self.coding_call_count}', "chat_history.json"), "w") as f:
+            coding_output_path = os.path.join(self.history_save_dir, f'coding_output_{self.coding_call_count}')
+            with open(os.path.join(coding_output_path, "chat_history.json"), "w") as f:
                 json.dump(chat_history, f)
+            
+            # Count coding steps (number of exitcode occurrences)
+            coding_steps = json.dumps(chat_history).count('exitcode:')
+            
+            # Record action log for statistics
+            action_log = {
+                "call_index": self.coding_call_count,
+                "type": "code_execution", 
+                "task": task,
+                "environment": environment,
+                "steps": coding_steps,
+                "model": self.llm_model,
+                "save_path": coding_output_path
+            }
+            self.action_logs.append(action_log)
+
+            usage = coding_agent.get_total_usage()
+            if self.llm_model not in self.model_usage:
+                self.model_usage[self.llm_model] = {"cost": 0.0, "prompt_tokens": 0, "completion_tokens": 0}
+            prompt_tokens = usage[self.llm_model].get("prompt_tokens", 0)
+            completion_tokens = usage[self.llm_model].get("completion_tokens", 0)
+            cost = (prompt_tokens * self.llm_config["price"][0] + completion_tokens * self.llm_config["price"][1]) / 1000
+            self.model_usage[self.llm_model]["cost"] += cost
+            self.model_usage[self.llm_model]["prompt_tokens"] += prompt_tokens
+            self.model_usage[self.llm_model]["completion_tokens"] += completion_tokens
+            
             self.coding_call_count += 1
 
             # Review the group chat history

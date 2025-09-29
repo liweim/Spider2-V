@@ -100,7 +100,7 @@ class PythonController:
             logger.error("An error occurred while trying to execute the command: %s", e)
             return {"status": "error", "message": e}
     
-    def run_python_script(self, script: str) -> Optional[Dict[str, Any]]:
+    def run_python_script(self, script: str, timeout: int = 90) -> Optional[Dict[str, Any]]:
         """
         Executes a python script on the server.
         """
@@ -109,7 +109,7 @@ class PythonController:
         for _ in range(self.retry_times):
             try:
                 response = requests.post(self.http_server + "/run_python", headers={'Content-Type': 'application/json'},
-                                         data=payload, timeout=90)
+                                         data=payload, timeout=timeout)
                 if response.status_code == 200:
                     return response.json()
                 else:
@@ -148,7 +148,7 @@ class PythonController:
                     self.http_server + "/run_bash_script", 
                     headers={'Content-Type': 'application/json'},
                     data=payload, 
-                    timeout=timeout + 100  # Add buffer to HTTP timeout
+                    timeout=timeout
                 )
                 if response.status_code == 200:
                     result = response.json()
