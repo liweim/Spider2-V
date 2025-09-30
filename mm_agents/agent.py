@@ -23,7 +23,8 @@ from google.api_core.exceptions import InvalidArgument, ResourceExhausted, Inter
 
 from mm_agents.accessibility_tree_wrap.heuristic_retrieve import filter_nodes, draw_bounding_boxes
 from mm_agents.prompt_templates import ACTION_SPACE_PROMPTS, OBSERVATION_SPACE_PROMPTS, SYSTEM_PROMPT
-from configs.config import OPENAI_API_KEY
+from configs.config import ROAD2ALL_API_KEY as OPENAI_API_KEY
+from configs.config import ROAD2ALL_API_URL as OPENAI_API_URL
 
 logger = logging.getLogger("desktopenv.agent")
 
@@ -232,13 +233,6 @@ class PromptAgent:
         action_prompt = ACTION_SPACE_PROMPTS[action_key]
         observation_prompt = OBSERVATION_SPACE_PROMPTS[self.observation_space]
         self.system_message = SYSTEM_PROMPT.format(action_prompt=action_prompt, observation_prompt=observation_prompt, screen_width=screen_size['width'], screen_height=screen_size['height'])
-
-
-    def get_current_cost(self) -> str:
-        pc, cc = get_model_pricing(self.model)
-        total_cost = pc * self.usages["prompt_tokens"] + cc * self.usages["completion_tokens"]
-        logger.info(f'[INFO]: Current usage: {self.usages["prompt_tokens"] * 1e-6:.2f}M prompt tokens, {self.usages["completion_tokens"] * 1e-6:.2f}M completion tokens, cost ${total_cost:.2f} .')
-        return
 
 
     def add_action_infos(self, messages, action_list: List[Union[str, Dict]], infos: List[Dict], failed_only: bool = True) -> Dict:
@@ -586,7 +580,7 @@ class PromptAgent:
             }
             logger.info("Generating content with GPT model: %s", self.model)
             response = requests.post(
-                "https://api.openai.com/v1/chat/completions",
+                f"{OPENAI_API_URL}/chat/completions",
                 headers=headers,
                 json=payload
             )
@@ -596,7 +590,7 @@ class PromptAgent:
                     logger.error("Context length exceeded. Retrying with a smaller context.")
                     payload["messages"] = [payload["messages"][0]] + payload["messages"][-1:]
                     retry_response = requests.post(
-                        "https://api.openai.com/v1/chat/completions",
+                        f"{OPENAI_API_URL}/chat/completions",
                         headers=headers,
                         json=payload
                     )

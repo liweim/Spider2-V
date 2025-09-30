@@ -5,8 +5,6 @@ from typing import List, Optional, Tuple
 import json
 import os
 import logging
-from configs.config import OPENAI_API_KEY
-from pydantic import SecretStr
 from mm_agents.coact.autogen import LLMConfig
 from desktop_env.envs.desktop_env import DesktopEnv
 from mm_agents.coact.autogen.agentchat.contrib.multimodal_conversable_agent import MultimodalConversableAgent
@@ -256,10 +254,6 @@ class MyAgentFramework:
     ):
         # Initialize LLM config
         self.llm_config = LLMConfig.from_json(path=llm_config_path).where(model=coordinator_model)
-        
-        # Update API keys
-        for config_item in self.llm_config.config_list:
-            config_item.api_key = SecretStr(OPENAI_API_KEY)
         
         # Initialize agents
         self.coordinator = CoordinatorAgent(

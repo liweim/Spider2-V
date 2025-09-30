@@ -6,6 +6,8 @@ python run_coact.py --result_dir results/coact_15_10_10_20_account --snapshot co
 
 python run_my_agent.py --result_dir results/my_agent_o4_mini_50_rag_verbose --snapshot config --coordinator_model o4-mini-2025-04-16 --max_steps 50 --rag --verbose_instruction --test_all_meta_path evaluation_examples/test_small.json --headless
 
+python run_langgraph_agent.py --result_dir results/langgraph_o4_mini_50_rag_verbose --snapshot config --coordinator_model o4-mini-2025-04-16 --max_steps 2 --rag --verbose_instruction --test_all_meta_path evaluation_examples/test_small.json --headless
+
 #复现过程
 打开虚拟机改里面的内容，更新代码：/home/user/server/main.py，保存快照，确保分辨率为1920x1080
 sudo systemctl daemon-reload
@@ -22,3 +24,6 @@ $env:SNOW_INSTANCE_PWD="^lq3Q+XKK9?n"
 workarena-install
 
 ## dbt，需要双重验证且pydantic<2，与autogen冲突
+
+$env:OPENAI_API_KEY="sk-E7gOgfTjf0tREnYXEa1767178b7f43499eBdA49389CdD905"
+$env:OPENAI_API_BASE="https://api2.road2all.com/v1"

@@ -14,9 +14,6 @@ import logging
 from multiprocessing import Pool, cpu_count
 from functools import partial
 import sys
-from configs.config import OPENAI_API_KEY
-from pydantic import SecretStr
-import numpy as np
 from utils import build_additional_contexts, summary, serialize_json, save_args_to_settings, get_price
 
 
@@ -172,10 +169,6 @@ def process_task(task_info,
     
     # Recreate llm_config inside the worker process
     llm_config = LLMConfig.from_json(path=config_path).where(model=orchestrator_model)
-    
-    # Update all api_key values to use OPENAI_API_KEY from config
-    for config_item in llm_config.config_list:
-        config_item.api_key = SecretStr(OPENAI_API_KEY)
     
     history_save_dir = os.path.join(result_dir, f"{domain}/{ex_id}")
     task_config = json.load(open(cfg))

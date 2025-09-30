@@ -7,9 +7,7 @@ import os
 import sys
 import shutil
 from typing import Dict, List, Tuple
-from functools import partial
-from multiprocessing import Pool, cpu_count
-from mm_agents.my_agent import MyAgentFramework
+from mm_agents.langgraph_agent import MyAgentFramework
 import traceback
 from utils import build_additional_contexts, summary, save_args_to_settings
 from tqdm import tqdm
@@ -27,7 +25,7 @@ def process_single_task(
     snapshot_name = args.snapshot_name
     result_dir = args.result_dir
     coordinator_model = args.coordinator_model
-    llm_config_path = args.llm_config_path
+    operator_model = args.operator_model
     max_steps = args.max_steps
     screen_width = args.screen_width
     screen_height = args.screen_height
@@ -60,11 +58,11 @@ def process_single_task(
         # Initialize framework
         framework = MyAgentFramework(
             coordinator_model=coordinator_model,
+            operator_model=operator_model,
             operator_client_password=client_password,
             screen_width=screen_width,
             screen_height=screen_height,
             sleep_after_execution=sleep_after_execution,
-            llm_config_path=llm_config_path,
             max_steps=max_steps,
             history_save_dir=history_save_dir
         )
@@ -131,9 +129,10 @@ def main():
     parser.add_argument("--headless", action="store_true", help="Run in headless mode")
 
     # Agent config
-    parser.add_argument("--llm_config_path", type=str, default="mm_agents/coact/OAI_CONFIG_LIST")
     parser.add_argument("--coordinator_model", type=str, default="o3-2025-04-16",
                        help="Model for Coordinator agent")
+    parser.add_argument("--operator_model", type=str, default="computer-use-preview",
+                       help="Model for Operator agent")
     parser.add_argument("--max_steps", type=int, default=15,
                        help="Maximum steps for Coordinator")
 

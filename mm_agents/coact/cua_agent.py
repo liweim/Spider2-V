@@ -8,7 +8,6 @@ from typing import Any, Dict, List, Tuple
 import openai
 from desktop_env.envs.desktop_env import DesktopEnv
 from openai import OpenAI  # pip install --upgrade openai>=1.66.2
-from configs.config import OPENAI_API_KEY
 from utils import get_price
 
 logger = logging.getLogger("desktopenv")
@@ -164,7 +163,7 @@ def run_cua(
     client_password: str = "",
     model: str = "computer-use-preview",
 ) -> Tuple[List, str, float, int, int]:
-    client = OpenAI(api_key=OPENAI_API_KEY)
+    client = OpenAI()
 
     # 0 / reset & first screenshot
     logger.info(f"Instruction: {instruction}")
