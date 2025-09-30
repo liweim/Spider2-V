@@ -16,6 +16,7 @@ from .autogen.agentchat.contrib.multimodal_conversable_agent import MultimodalCo
 
 from .cua_agent import run_cua
 from .coding_agent import TerminalProxyAgent, CODER_SYSTEM_MESSAGE
+from utils import get_price
 
 ONLY_CUA = False #False 更新
 
@@ -162,7 +163,8 @@ class OrchestratorUserProxyAgent(MultimodalConversableAgent):
         coding_max_steps: int = 30,
         cut_off_steps: int = 200,
         history_save_dir: str = "",
-        llm_model: str = "o4-mini-2025-04-16",
+        coding_model: str = "o4-mini-2025-04-16",
+        summarizer_model: str = "o4-mini-2025-04-16",
         cua_model: str = "computer-use-preview",
         client_password: str = "",
         user_instruction: str = "",
@@ -218,10 +220,11 @@ class OrchestratorUserProxyAgent(MultimodalConversableAgent):
         self.coding_max_steps = coding_max_steps
         self.cut_off_steps = cut_off_steps
         # self.llm_config = llm_config
-        self.llm_model = llm_model
+        self.coding_model = coding_model
+        self.summarizer_model = summarizer_model
         self.cua_model = cua_model
         llm_configs = json.load(open("mm_agents/coact/OAI_CONFIG_LIST", "r"))
-        self.llm_config = next((config for config in llm_configs if config["model"] == llm_model), None)
+        self.llm_config = next((config for config in llm_configs if config["model"] == coding_model), None)
         
         # Add statistics tracking
         self.action_logs = []  # Unified action log list
@@ -239,9 +242,7 @@ class OrchestratorUserProxyAgent(MultimodalConversableAgent):
         sender: Optional["Agent"] = None,
         **kwargs: Any,
     ) -> Optional[Union[str, dict[str, Any]]]:
-        """重写generate_reply方法，在每轮对话前检查步数限制"""
         
-        # 检查当前总步数
         current_steps = self._count_current_steps()
         if current_steps >= self.cut_off_steps:
             print(f"Reached cut_off_steps limit: {current_steps}/{self.cut_off_steps}")
@@ -250,15 +251,11 @@ class OrchestratorUserProxyAgent(MultimodalConversableAgent):
                 "content": [{"type": "text", "text": "TERMINATE"}]
             }
         
-        # 调用父类的generate_reply方法
         return super().generate_reply(messages=messages, sender=sender, **kwargs)
     
     def _count_current_steps(self) -> int:
-        """统计当前已执行的总步数"""
-        # 统计CUA步数：计算所有cua_output目录下的step_*.png文件
         cua_steps = len(glob.glob(f"{self.history_save_dir}/cua_output*/step_*.png"))
         
-        # 统计编程步数：计算所有coding_output目录下的exitcode数量
         coding_paths = glob.glob(f"{self.history_save_dir}/coding_output*/chat_history.json")
         coding_steps = 0
         for hist_path in coding_paths:
@@ -267,7 +264,7 @@ class OrchestratorUserProxyAgent(MultimodalConversableAgent):
                     hist_content = json.dumps(json.load(f))
                     coding_steps += hist_content.count('exitcode:')
             except:
-                pass  # 忽略文件读取错误
+                pass
         
         return cua_steps + coding_steps
 
@@ -311,11 +308,11 @@ class OrchestratorUserProxyAgent(MultimodalConversableAgent):
             self.action_logs.append(action_log)
             
             # Update model-specific usage
-            if self.cua_model not in self.model_usage:
-                self.model_usage[self.cua_model] = {"cost": 0.0, "prompt_tokens": 0, "completion_tokens": 0}
-            self.model_usage[self.cua_model]["cost"] += cost
-            self.model_usage[self.cua_model]["prompt_tokens"] += input_tokens
-            self.model_usage[self.cua_model]["completion_tokens"] += output_tokens
+            if "cua" not in self.model_usage:
+                self.model_usage["cua"] = {"cost": 0.0, "prompt_tokens": 0, "completion_tokens": 0}
+            self.model_usage["cua"]["cost"] += cost
+            self.model_usage["cua"]["prompt_tokens"] += input_tokens
+            self.model_usage["cua"]["completion_tokens"] += output_tokens
             
             self.cua_call_count += 1
 
@@ -339,7 +336,7 @@ class OrchestratorUserProxyAgent(MultimodalConversableAgent):
             screenshot = self.env.controller.get_screenshot()
             coding_agent = MultimodalConversableAgent(
                 name="coding_agent",
-                llm_config=LLMConfig(api_type="openai", model=self.llm_model),
+                llm_config=LLMConfig(api_type="openai", model=self.coding_model),
                 system_message=CODER_SYSTEM_MESSAGE.format(CLIENT_PASSWORD=self.client_password),
             )
             code_interpreter = TerminalProxyAgent(
@@ -388,27 +385,17 @@ class OrchestratorUserProxyAgent(MultimodalConversableAgent):
                 "task": task,
                 "environment": environment,
                 "steps": coding_steps,
-                "model": self.llm_model,
+                "model": self.coding_model,
                 "save_path": coding_output_path
             }
             self.action_logs.append(action_log)
 
-            usage = coding_agent.get_total_usage()
-            if self.llm_model not in self.model_usage:
-                self.model_usage[self.llm_model] = {"cost": 0.0, "prompt_tokens": 0, "completion_tokens": 0}
-            prompt_tokens = usage[self.llm_model].get("prompt_tokens", 0)
-            completion_tokens = usage[self.llm_model].get("completion_tokens", 0)
-            cost = (prompt_tokens * self.llm_config["price"][0] + completion_tokens * self.llm_config["price"][1]) / 1000
-            self.model_usage[self.llm_model]["cost"] += cost
-            self.model_usage[self.llm_model]["prompt_tokens"] += prompt_tokens
-            self.model_usage[self.llm_model]["completion_tokens"] += completion_tokens
-            
             self.coding_call_count += 1
 
             # Review the group chat history
             summarizer = ConversableAgent(
                 name="summarizer",
-                llm_config=LLMConfig(api_type="openai", model=self.llm_model),
+                llm_config=LLMConfig(api_type="openai", model=self.summarizer_model),
                 system_message=self.CONVERSATION_REVIEW_PROMPT,
             )
             summarized_history = summarizer.generate_oai_reply(
@@ -419,6 +406,29 @@ class OrchestratorUserProxyAgent(MultimodalConversableAgent):
                     }
                 ]
             )[1]
+
+            coding_usage = coding_agent.get_total_usage()
+            if "coding" not in self.model_usage:
+                self.model_usage["coding"] = {"cost": 0.0, "prompt_tokens": 0, "completion_tokens": 0}
+            prompt_tokens = coding_usage[self.coding_model].get("prompt_tokens", 0)
+            completion_tokens = coding_usage[self.coding_model].get("completion_tokens", 0)
+            prompt_price, completion_price = get_price(self.coding_model)
+            cost = prompt_tokens * prompt_price + completion_tokens * completion_price
+            self.model_usage["coding"]["cost"] += cost
+            self.model_usage["coding"]["prompt_tokens"] += prompt_tokens
+            self.model_usage["coding"]["completion_tokens"] += completion_tokens
+
+            summarizer_usage = summarizer.get_total_usage()
+            if "summarizer" not in self.model_usage:
+                self.model_usage["summarizer"] = {"cost": 0.0, "prompt_tokens": 0, "completion_tokens": 0}
+            prompt_tokens = summarizer_usage[self.summarizer_model].get("prompt_tokens", 0)
+            completion_tokens = summarizer_usage[self.summarizer_model].get("completion_tokens", 0)
+            prompt_price, completion_price = get_price(self.summarizer_model)
+            cost = prompt_tokens * prompt_price + completion_tokens * completion_price
+            self.model_usage["summarizer"]["cost"] += cost
+            self.model_usage["summarizer"]["prompt_tokens"] += prompt_tokens
+            self.model_usage["summarizer"]["completion_tokens"] += completion_tokens
+
         except Exception:
             return f"# Call coding agent error: {traceback.format_exc()}"
 

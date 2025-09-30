@@ -441,11 +441,11 @@ class MyAgentFramework:
             self.action_logs.append(action_log)
             
             # Update model-specific usage
-            if self.operator_model not in self.model_usage:
-                self.model_usage[self.operator_model] = {"cost": 0.0, "prompt_tokens": 0, "completion_tokens": 0}
-            self.model_usage[self.operator_model]["cost"] += cost
-            self.model_usage[self.operator_model]["prompt_tokens"] += input_tokens
-            self.model_usage[self.operator_model]["completion_tokens"] += output_tokens
+            if "operator" not in self.model_usage:
+                self.model_usage["operator"] = {"cost": 0.0, "prompt_tokens": 0, "completion_tokens": 0}
+            self.model_usage["operator"]["cost"] += cost
+            self.model_usage["operator"]["prompt_tokens"] += input_tokens
+            self.model_usage["operator"]["completion_tokens"] += output_tokens
             
             # Get current screenshot after action
             screenshot = self.env.controller.get_screenshot()
@@ -490,27 +490,24 @@ class MyAgentFramework:
         coordinator_prompt_tokens = coordinator_usage.get('prompt_tokens', 0)
         coordinator_completion_tokens = coordinator_usage.get('completion_tokens', 0)
         coordinator_cost = coordinator_usage.get('cost', 0.0)
+        if "coordinator" not in self.model_usage:
+            self.model_usage["coordinator"] = {"cost": 0.0, "prompt_tokens": 0, "completion_tokens": 0}
+        self.model_usage["coordinator"]["prompt_tokens"] += coordinator_prompt_tokens
+        self.model_usage["coordinator"]["completion_tokens"] += coordinator_completion_tokens
+        self.model_usage["coordinator"]["cost"] += coordinator_cost
+        
+        prompt_tokens = sum(self.model_usage[model]["prompt_tokens"] for model in self.model_usage)
+        completion_tokens = sum(self.model_usage[model]["completion_tokens"] for model in self.model_usage)
+        total_cost = sum(self.model_usage[model]["cost"] for model in self.model_usage)
+        cua_steps = len([log for log in self.action_logs if log["type"] == "gui_operator"])
+        code_operations = len([log for log in self.action_logs if log["type"] == "code_execution"])
 
-        if self.coordinator_model not in self.model_usage:
-            self.model_usage[self.coordinator_model] = {"cost": 0.0, "prompt_tokens": 0, "completion_tokens": 0}
-        self.model_usage[self.coordinator_model]["prompt_tokens"] += coordinator_prompt_tokens
-        self.model_usage[self.coordinator_model]["completion_tokens"] += coordinator_completion_tokens
-        self.model_usage[self.coordinator_model]["cost"] += coordinator_cost
-        
-        # Calculate totals
-        prompt_tokens = self.model_usage[self.coordinator_model]["prompt_tokens"] + self.model_usage[self.operator_model]["prompt_tokens"]
-        completion_tokens = self.model_usage[self.coordinator_model]["completion_tokens"] + self.model_usage[self.operator_model]["completion_tokens"]
-        
         # Evaluate task completion
         try:
             score = self.env.evaluate()
         except Exception as e:
             logging.getLogger("desktopenv").error(f"Evaluation error: {e}")
             score = 0.0
-
-        total_cost = self.model_usage[self.coordinator_model]["cost"] + self.model_usage[self.operator_model]["cost"]
-        cua_steps = len([log for log in self.action_logs if log["type"] == "gui_operator"])
-        code_operations = len([log for log in self.action_logs if log["type"] == "code_execution"])
         
         print(f"Score: {score}")
         print(f"Total operations: {cua_steps + code_operations} (GUI: {cua_steps}, Code: {code_operations})")

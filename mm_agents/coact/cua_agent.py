@@ -9,6 +9,7 @@ import openai
 from desktop_env.envs.desktop_env import DesktopEnv
 from openai import OpenAI  # pip install --upgrade openai>=1.66.2
 from configs.config import OPENAI_API_KEY
+from utils import get_price
 
 logger = logging.getLogger("desktopenv")
 
@@ -107,10 +108,6 @@ def call_openai_cua(client: OpenAI,
                     model: str = "computer-use-preview") -> Tuple[Any, float, int, int]:
     retry = 0
     response = None
-    llm_configs = json.load(open("mm_agents/coact/OAI_CONFIG_LIST", "r"))
-    llm_config = next((config for config in llm_configs if config["model"] == model), None)
-    if not llm_config:
-        raise ValueError(f"Model {model} not found in OAI_CONFIG_LIST")
     
     while retry < 1:
         try:
@@ -144,11 +141,12 @@ def call_openai_cua(client: OpenAI,
     cost = 0.0
     input_tokens = 0
     output_tokens = 0
+    prompt_price, completion_price = get_price(model)
     if response and hasattr(response, "usage") and response.usage:
         input_tokens = response.usage.input_tokens
         output_tokens = response.usage.output_tokens
-        input_cost = input_tokens * llm_config["price"][0] / 1000
-        output_cost = output_tokens * llm_config["price"][1] / 1000
+        input_cost = input_tokens * prompt_price
+        output_cost = output_tokens * completion_price
         cost = input_cost + output_cost
 
     return response, cost, input_tokens, output_tokens
@@ -186,7 +184,6 @@ def run_cua(
     total_cost = cost
     total_input_tokens = input_tokens
     total_output_tokens = output_tokens
-    logger.info(f"Cost: ${cost:.6f} | Total Cost: ${total_cost:.6f}")
     step_no = 0
     
     reasoning_list = []
@@ -336,7 +333,6 @@ def run_cua(
         total_cost += cost
         total_input_tokens += input_tokens
         total_output_tokens += output_tokens
-        logger.info(f"Cost: ${cost:.6f} | Total Cost: ${total_cost:.6f}")
     
     # 更新：发送Esc键到虚拟机关闭临时窗口
     logger.info("Task completed, press Esc to close the temporary window")

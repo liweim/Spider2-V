@@ -86,8 +86,7 @@ def run_single_example(agent: PromptAgent, env: DesktopEnv, example: dict, resul
     agent.get_current_cost()
     
     # Calculate total cost from agent usage
-    from mm_agents.agent import get_model_pricing
-    pc, cc = get_model_pricing(agent.model)
+    
     total_cost = pc * agent.usages["prompt_tokens"] + cc * agent.usages["completion_tokens"]
     
     try: # for safety reason, wrap the evaluation in a try-except block

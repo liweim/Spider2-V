@@ -53,30 +53,6 @@ def save_to_tmp_img_file(data_str):
     return tmp_img_path
 
 
-def get_model_pricing(model_name: str) -> Tuple[float, float]:
-    pricing = {
-        'gpt-3.5-turbo': {
-            'prompt': 0.5e-6,
-            'completion': 1.5e-6
-        },
-        'gpt-4-turbo': {
-            'prompt': 10e-6,
-            'completion': 30e-6
-        },
-        'gpt-4o': {
-            'prompt': 5e-6,
-            'completion': 15e-6
-        }
-    }
-    if model_name.startswith('gpt-3.5'): model_name = 'gpt-3.5-turbo'
-    elif model_name.startswith('gpt-4o'): model_name = 'gpt-4o'
-    elif model_name.startswith('gpt-4'): model_name = 'gpt-4-turbo'
-    if model_name in pricing:
-        return pricing[model_name]['prompt'], pricing[model_name]['completion']
-    logger.warning(f"Model {model_name} is not in the pricing list.")
-    return 0.0, 0.0
-
-
 def linearize_accessibility_tree(filtered_nodes: List[ET.Element], add_index: bool = False) -> str:
     # leaf_nodes = find_leaf_nodes(accessibility_tree)
     # first line is headers

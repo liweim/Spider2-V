@@ -17,7 +17,7 @@ import sys
 from configs.config import OPENAI_API_KEY
 from pydantic import SecretStr
 import numpy as np
-from utils import build_additional_contexts, summary, serialize_json, save_args_to_settings
+from utils import build_additional_contexts, summary, serialize_json, save_args_to_settings, get_price
 
 
 TASK_DESCRIPTION = """# Your role
@@ -70,6 +70,7 @@ def config() -> argparse.Namespace:
     parser.add_argument("--oai_config_path", type=str, default="mm_agents/coact/OAI_CONFIG_LIST")
     parser.add_argument("--orchestrator_model", type=str, default="o3-2025-04-16")
     parser.add_argument("--coding_model", type=str, default="o4-mini-2025-04-16")
+    parser.add_argument("--summarizer_model", type=str, default="o4-mini-2025-04-16")
     parser.add_argument("--cua_model", type=str, default="computer-use-preview")
     parser.add_argument("--orchestrator_max_steps", type=int, default=15) #15
     parser.add_argument("--coding_max_steps", type=int, default=20) #20
@@ -146,8 +147,9 @@ logger = logging.getLogger("desktopenv.expeiment")
 def process_task(task_info, 
                 path_to_vm,
                 snapshot_name="init_state",
-                orchestrator_model="o3",
+                orchestrator_model="o3-2025-04-16",
                 coding_model='o4-mini-2025-04-16',
+                summarizer_model='o4-mini-2025-04-16',
                 cua_model='computer-use-preview',
                 result_dir='results/coact',
                 orchestrator_max_steps=15,
@@ -206,7 +208,8 @@ def process_task(task_info,
                 sleep_after_execution=sleep_after_execution,
                 code_execution_config=False,
                 history_save_dir=history_save_dir,
-                llm_model=coding_model,
+                coding_model=coding_model,
+                summarizer_model=summarizer_model,
                 cua_model=cua_model,
                 truncate_history_inputs=cua_max_steps + 1,
                 cua_max_steps=cua_max_steps,
@@ -261,42 +264,23 @@ def process_task(task_info,
                 coding_steps += hist.count('exitcode:')
         score = orchestrator_proxy.env.evaluate()
         
-        cua_usage = orchestrator_proxy.model_usage.get(cua_model, {})
-        cua_prompt_tokens = cua_usage.get('prompt_tokens', 0)
-        cua_completion_tokens = cua_usage.get('completion_tokens', 0)
-        cua_cost = cua_usage.get('cost', 0.0)
-        coding_usage = orchestrator_proxy.model_usage.get(coding_model, {})
-        coding_prompt_tokens = coding_usage.get('prompt_tokens', 0)
-        coding_completion_tokens = coding_usage.get('completion_tokens', 0)
-        coding_cost = coding_usage.get('cost', 0.0)
-        
         orchestrator_usage = orchestrator.get_total_usage().get(orchestrator_model, {})
         orchestrator_prompt_tokens = orchestrator_usage.get('prompt_tokens', 0)
         orchestrator_completion_tokens = orchestrator_usage.get('completion_tokens', 0)
-        orchestrator_cost = orchestrator_usage.get('cost', 0.0)
-        
-        # Combine token usage from both agents
-        prompt_tokens = orchestrator_prompt_tokens + cua_prompt_tokens + coding_prompt_tokens
-        completion_tokens = orchestrator_completion_tokens + cua_completion_tokens + coding_completion_tokens
-        total_cost = orchestrator_cost + cua_cost + coding_cost
-        
-        # Create model usage breakdown
-        model_usage_breakdown = {}
-        model_usage_breakdown["orchestrator"] = {
+        prompt_price, completion_price = get_price(orchestrator_model)
+        orchestrator_cost = orchestrator_prompt_tokens * prompt_price + orchestrator_completion_tokens * completion_price
+
+        model_usage = orchestrator_proxy.model_usage
+        model_usage["orchestrator"] = {
             "cost": orchestrator_cost,
             "prompt_tokens": orchestrator_prompt_tokens,
             "completion_tokens": orchestrator_completion_tokens
         }
-        model_usage_breakdown["cua"] = {
-            "cost": cua_cost,
-            "prompt_tokens": cua_prompt_tokens,
-            "completion_tokens": cua_completion_tokens
-        }
-        model_usage_breakdown["coding"] = {
-            "cost": coding_cost,
-            "prompt_tokens": coding_prompt_tokens,
-            "completion_tokens": coding_completion_tokens
-        }
+        
+        # Combine token usage from both agents
+        prompt_tokens = sum(model_usage[model]["prompt_tokens"] for model in model_usage)
+        completion_tokens = sum(model_usage[model]["completion_tokens"] for model in model_usage)
+        total_cost = sum(model_usage[model]["cost"] for model in model_usage)
         
         unified_log = {
             "statistics": {
@@ -307,7 +291,7 @@ def process_task(task_info,
                 "total_cost": total_cost,
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
-                "model_usage": model_usage_breakdown
+                "model_usage": model_usage
             },
             "task_config": task_config,
             "additional_context": additional_context,
@@ -404,6 +388,7 @@ if __name__ == "__main__":
                                 snapshot_name=args.snapshot_name,
                                 result_dir=args.result_dir,
                                 coding_model=args.coding_model,
+                                summarizer_model=args.summarizer_model,
                                 cua_model=args.cua_model,
                                 orchestrator_model=args.orchestrator_model,
                                 config_path=args.oai_config_path, 

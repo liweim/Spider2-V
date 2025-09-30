@@ -8,6 +8,14 @@ from typing import Optional, Tuple
 import json
 import numpy as np
 
+def get_price(model: str) -> Tuple[float, float]:
+    llm_configs = json.load(open("mm_agents/coact/OAI_CONFIG_LIST", "r"))
+    llm_config = next((config for config in llm_configs if config["model"] == model), None)
+    if not llm_config:
+        raise ValueError(f"Model {model} not found in OAI_CONFIG_LIST")
+    prompt_price, completion_price = llm_config["price"]
+    return prompt_price/1000000, completion_price/1000000
+
 def serialize_json(obj):
     """Convert objects to JSON serializable format"""
     if hasattr(obj, '__dict__'):
@@ -251,4 +259,4 @@ def summary(args, test_all_meta):
     with open(os.path.join(args.result_dir, "summary.json"), "w", encoding="utf-8") as f:
         json.dump(detailed_stats, f, indent=2, ensure_ascii=False)
     
-    print(json.dumps(detailed_stats, indent=2, ensure_ascii=False))
+    print(json.dumps(detailed_stats['summary'], indent=2, ensure_ascii=False))
