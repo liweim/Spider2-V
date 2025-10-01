@@ -1,58 +1,51 @@
 #!/usr/bin/env python3
 """
 LangGraph-based Dual Agent Framework
-Complete implementation with proper state management and debugging
+Complete implementation with bash-only execution and proper state management
 """
 
 import base64
 import json
 import os
 import logging
-import time
 import traceback
 from typing import TypedDict, Annotated, Literal, Optional, Tuple, List, Any, Dict
-
 import operator as op
 from langgraph.graph import StateGraph, END
-from openai import OpenAI
-import openai
-
 from desktop_env.envs.desktop_env import DesktopEnv
-from configs.config import OPENAI_API_KEY
-from utils import serialize_json, get_price
-
-
-PYTHON_VARIANTS = ["python", "Python", "py"]
+from llm import AbstractLLM
+from utils import serialize_json
+from json_repair import repair_json
 
 
 # ==================== PROMPTS ====================
 
 COORDINATOR_SYSTEM_MESSAGE = """# Your role
 You are a task solver, you need to complete a computer-using task step-by-step.
-1. Describe the screenshot.
-2. Provide a detailed plan, including a list of user requirements like specific file name, file path, etc.
-3. Follow the following instructions and complete the task with your skills.
+1. Provide a detailed plan, including a list of user requirements like specific file name, file path, etc.
+2. Follow the following instructions and complete the task with your skills.
     - If you think the task is impossible to complete (no file, wrong environment, etc.), reply with "INFEASIBLE" to end the conversation.
     - **Do not** do anything else out of the user's instruction like change the file name. This will make the task fail.
     - Check every screenshot carefully and see if it fulfills the task requirement.
     - You MUST try code execution first for file operation tasks like spreadsheet modification.
-4. Verify the result and see if it fulfills the user's requirement.
+3. Verify the result and see if it fulfills the user's requirement.
 
 # Your skills
 You can use the following tools to solve the task:
 
-## Code Execution
-You can write code in ```bash...``` code blocks for bash scripts, and ```python...``` code blocks for python code.
+## Code Execution (Bash Only)
+You can write bash commands in ```bash...``` code blocks. ALL code execution must be in bash format.
 - Your linux username is "user"
 - If you want to use sudo, follow the format: "echo {CLIENT_PASSWORD} | sudo -S [YOUR COMMANDS]" (no quotes for the word "{CLIENT_PASSWORD}")
 - You MUST verify the result before save the changes
-- When you write code, you must identify the language (whether it is python or bash) of the code
-- Wrap all your code in ONE code block. DO NOT let user save the code as a file and execute it for you
-- Do not include __main__ in your python code
+- Wrap all your code in ONE bash code block. DO NOT let user save the code as a file and execute it for you
 - When you modify a spreadsheet, **make sure every value is in the expected cell**
-- When importing a package, you need to check if the package has been installed. If not, you need to install it yourself
 - You need to print the progressive and final result
-- If you met execution error, you need to analyze the error message and try to fix the error
+
+### Python Execution via Bash
+If you need to run Python code, use bash format with inline Python.
+- Install packages if needed, for example: `pip install numpy && python3 -c "import numpy; print('success')"`
+- Always check if packages are installed before using them
 
 ## GUI Operator
 Let a GUI Operator to solve a subtask you assigned.
@@ -61,22 +54,23 @@ Require a detailed task description.
 The Operator executes ONE GUI action per call (one click, one type, etc.). Each step is a one-time interaction with OS like mouse click or keyboard typing. Please take this into account when you plan the actions.
 If you let GUI Operator to check the result, you MUST let it close and reopen the file because programmer's result will NOT be updated to the screen.
 
-Remember: Use code execution for file operations and data processing. Use GUI Operator for visual interactions that require precise clicking or typing.
+Remember: Use bash execution (including inline Python) for file operations and data processing. Use GUI Operator for visual interactions that require precise clicking or typing.
 
 # Decision Format
 Your response MUST be in JSON format:
 {
     "thought": "Your reasoning about current situation and next action",
     "action": "code|gui|terminate",
-    "content": "Code to execute OR task description for GUI operator",
-    "language": "python|bash (only for code action)"
+    "content": "Bash commands to execute OR task description for GUI operator"
 }
 
 If task is completed successfully, use action "terminate" with thought explaining completion.
 If task is impossible, use action "terminate" with thought "INFEASIBLE: [reason]".
+
+IMPORTANT: For "code" action, always provide bash commands. Never use Python directly.
 """
 
-OPERATOR_SYSTEM_MESSAGE = """# Task
+CUA_SYSTEM_MESSAGE = """# Task
 {instruction}
 
 # Hints
@@ -85,130 +79,20 @@ OPERATOR_SYSTEM_MESSAGE = """# Task
 - Use precise coordinates for clicking and typing.
 """
 
+OPERATOR_SYSTEM_MESSAGE = """You are an agent which follow my instruction and perform desktop computer tasks as instructed.
+You have good knowledge of computer and good internet connection and assume your code will run on a computer for controlling the mouse and keyboard.
+You will get an observation of an image, which is the screenshot of the computer screen and you will predict the action of the computer based on the image.
 
-# ==================== HELPER FUNCTIONS ====================
+You are required to use `pyautogui` to perform the action grounded to the observation, but DONOT use the `pyautogui.locateCenterOnScreen` function to locate the element you want to operate with since we have no image of the element you want to operate with. DONOT USE `pyautogui.screenshot()` to make screenshot.
+Return one line or multiple lines of python code to perform the action each time, be time efficient. When predicting multiple lines of code, make some small sleep like `time.sleep(0.5);` interval so that the machine could take; Each time you need to predict a complete code, no variables or function can be shared from history
+You need to to specify the coordinates of by yourself based on your observation of current observation, but you should be careful to ensure that the coordinates are correct.
+You ONLY need to return the code inside a code block, like this:
+```python
+# your code here
+```
 
-def call_openai_cua(
-    client: OpenAI,
-    history_inputs: list,
-    screen_width: int = 1920,
-    screen_height: int = 1080,
-    environment: str = "linux",
-    model: str = "computer-use-preview",
-    logger: logging.Logger = None
-) -> Tuple[Any, float, int, int]:
-    """Call OpenAI Computer Use API with retry logic."""
-    retry = 0
-    response = None
-    
-    while retry < 3:
-        try:
-            response = client.responses.create(
-                model=model,
-                tools=[{
-                    "type": "computer_use_preview",
-                    "display_width": screen_width,
-                    "display_height": screen_height,
-                    "environment": environment,
-                }],
-                input=history_inputs,
-                reasoning={"summary": "concise"},
-                tool_choice="required",
-                truncation="auto",
-            )
-            break
-        except openai.BadRequestError as e:
-            retry += 1
-            if logger:
-                logger.error(f"BadRequestError in response.create (retry {retry}): {e}")
-            time.sleep(0.5)
-        except openai.InternalServerError as e:
-            retry += 1
-            if logger:
-                logger.error(f"InternalServerError in response.create (retry {retry}): {e}")
-            time.sleep(0.5)
-        except Exception as e:
-            retry += 1
-            if logger:
-                logger.error(f"Error in response.create (retry {retry}): {e}")
-            time.sleep(0.5)
-    
-    if retry == 3:
-        raise Exception("Failed to call OpenAI after 3 retries.")
-
-    cost = 0.0
-    input_tokens = 0
-    output_tokens = 0
-    
-    try:
-        prompt_price, completion_price = get_price(model)
-        if response and hasattr(response, "usage") and response.usage:
-            input_tokens = response.usage.input_tokens
-            output_tokens = response.usage.output_tokens
-            input_cost = input_tokens * prompt_price
-            output_cost = output_tokens * completion_price
-            cost = input_cost + output_cost
-    except Exception as e:
-        if logger:
-            logger.warning(f"Error calculating cost: {e}")
-
-    return response, cost, input_tokens, output_tokens
-
-
-def _cua_to_pyautogui(action) -> str:
-    """Convert OpenAI CUA action to pyautogui command."""
-    def fld(key: str, default: Any = None) -> Any:
-        return action.get(key, default) if isinstance(action, dict) else getattr(action, key, default)
-
-    act_type = fld("type")
-    if not isinstance(act_type, str):
-        act_type = str(act_type).split(".")[-1]
-    act_type = act_type.lower()
-
-    if act_type in ["click", "double_click"]:
-        button = fld('button', 'left')
-        if button == 1 or button == 'left':
-            button = 'left'
-        elif button == 2 or button == 'middle':
-            button = 'middle'
-        elif button == 3 or button == 'right':
-            button = 'right'
-
-        if act_type == "click":
-            return f"pyautogui.click({fld('x')}, {fld('y')}, button='{button}')"
-        if act_type == "double_click":
-            return f"pyautogui.doubleClick({fld('x')}, {fld('y')}, button='{button}')"
-        
-    if act_type == "scroll":
-        cmd = ""
-        if fld('scroll_y', 0) != 0:
-            cmd += f"pyautogui.scroll({-fld('scroll_y', 0) / 100}, x={fld('x', 0)}, y={fld('y', 0)});"
-        return cmd
-    
-    if act_type == "drag":
-        path = fld('path', [{"x": 0, "y": 0}, {"x": 0, "y": 0}])
-        cmd = f"pyautogui.moveTo({path[0]['x']}, {path[0]['y']}, _pause=False); "
-        cmd += f"pyautogui.dragTo({path[1]['x']}, {path[1]['y']}, duration=0.5, button='left')"
-        return cmd
-
-    if act_type == 'move':
-        return f"pyautogui.moveTo({fld('x')}, {fld('y')})"
-
-    if act_type == "keypress":
-        keys = fld("keys", []) or [fld("key")]
-        if len(keys) == 1:
-            return f"pyautogui.press('{keys[0].lower()}')"
-        else:
-            return "pyautogui.hotkey('{}')".format("', '".join(keys)).lower()
-        
-    if act_type == "type":
-        text = str(fld("text", ""))
-        return "pyautogui.typewrite({:})".format(repr(text))
-    
-    if act_type == "wait":
-        return "WAIT"
-    
-    return "WAIT"
+My computer's password is '{CLIENT_PASSWORD}', feel free to use it when you need sudo rights.
+First give the current screenshot and previous things we did a short reflection, then RETURN ME THE CODE. NEVER EVER RETURN ME ANYTHING ELSE."""
 
 
 # ==================== STATE DEFINITION ====================
@@ -228,7 +112,6 @@ class AgentState(TypedDict):
     coordinator_thought: str
     coordinator_action: str
     coordinator_content: str
-    coordinator_language: str
     
     # Execution results
     last_execution_result: str
@@ -268,6 +151,8 @@ def coordinator_node(state: AgentState) -> dict:
     
     screenshot = state["current_screenshot"]
     screenshot_b64 = base64.b64encode(screenshot).decode("utf-8")
+
+    client = AbstractLLM(state.get("coordinator_model"))
     
     # Prepare prompt
     if state["operation_count"] == 0:
@@ -293,60 +178,57 @@ Continue with the task or verify if completed. Current screenshot attached below
         messages.extend(history)
     
     # Add current message
-    messages.append({
-        "role": "user",
-        "content": [
-            {"type": "text", "text": user_message},
-            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{screenshot_b64}"}}
-        ]
-    })
+    if client.is_vlm:
+        messages.append({
+            "role": "user",
+            "content": [
+                {"type": "text", "text": user_message},
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{screenshot_b64}"}}
+            ]
+        })
+    else:
+        messages.append({
+            "role": "user",
+            "content": [
+                {"type": "text", "text": user_message},
+            ]
+        })
     
     logger.info(f"\n{'='*80}")
     logger.info(f"[Coordinator] Operation count: {state['operation_count']}")
     
     try:
-        client = OpenAI(api_key=OPENAI_API_KEY)
-        response = client.chat.completions.create(
-            model=state.get("coordinator_model"),
-            messages=messages,
-            max_completion_tokens=2000,
-        )
-        
-        response_text = response.choices[0].message.content
-        prompt_tokens = response.usage.prompt_tokens
-        completion_tokens = response.usage.completion_tokens
-        
-        # Calculate cost
-        prompt_price, completion_price = get_price(state.get("coordinator_model"))
-        cost = (prompt_tokens * prompt_price + completion_tokens * completion_price)
+        response_text = client(messages)
+        cost, prompt_tokens, completion_tokens, image_count = client.get_usage()
         
         # Update model usage
         model_usage = state.get("model_usage", {}).copy()
         if "coordinator" not in model_usage:
-            model_usage["coordinator"] = {"cost": 0.0, "prompt_tokens": 0, "completion_tokens": 0}
+            model_usage["coordinator"] = {"cost": 0.0, "prompt_tokens": 0, "completion_tokens": 0, "image_count": 0}
         model_usage["coordinator"]["cost"] += cost
         model_usage["coordinator"]["prompt_tokens"] += prompt_tokens
         model_usage["coordinator"]["completion_tokens"] += completion_tokens
+        model_usage["coordinator"]["image_count"] += image_count
         
         # Parse JSON response
         try:
-            decision = json.loads(response_text)
-        except json.JSONDecodeError:
+            print("response_text:\n", response_text)
             if "```json" in response_text:
                 json_start = response_text.find("```json") + 7
                 json_end = response_text.find("```", json_start)
-                decision = json.loads(response_text[json_start:json_end].strip())
+                response_text = response_text[json_start:json_end].strip()
             elif "```" in response_text:
                 json_start = response_text.find("```") + 3
                 json_end = response_text.find("```", json_start)
-                decision = json.loads(response_text[json_start:json_end].strip())
-            else:
-                decision = {
-                    "thought": response_text,
-                    "action": "terminate",
-                    "content": response_text,
-                    "language": "python"
-                }
+                response_text = response_text[json_start:json_end].strip()
+            decision = json.loads(repair_json(response_text))
+        except json.JSONDecodeError:
+            # Fallback: treat as terminate action   
+            decision = {
+                "thought": response_text,
+                "action": "terminate",
+                "content": response_text
+            }
         
         logger.info(f"Thought: {decision.get('thought', 'N/A')[:200]}")
         logger.info(f"Action: {decision.get('action', 'N/A')}")
@@ -368,7 +250,6 @@ Continue with the task or verify if completed. Current screenshot attached below
                 "coordinator_thought": decision.get("thought", ""),
                 "coordinator_action": action,
                 "coordinator_content": decision.get("content", ""),
-                "coordinator_language": decision.get("language", "python"),
                 "conversation_history": conversation_history,
                 "model_usage": model_usage,
                 "next_node": "evaluator",
@@ -376,12 +257,11 @@ Continue with the task or verify if completed. Current screenshot attached below
                 "task_infeasible": task_infeasible
             }
         elif action == "code":
-            logger.info("Next: Code Execution")
+            logger.info("Next: Code Execution (Bash)")
             return {
                 "coordinator_thought": decision.get("thought", ""),
                 "coordinator_action": action,
                 "coordinator_content": decision.get("content", ""),
-                "coordinator_language": decision.get("language", "python"),
                 "conversation_history": conversation_history,
                 "model_usage": model_usage,
                 "next_node": "code_executor",
@@ -394,7 +274,6 @@ Continue with the task or verify if completed. Current screenshot attached below
                 "coordinator_thought": decision.get("thought", ""),
                 "coordinator_action": action,
                 "coordinator_content": decision.get("content", ""),
-                "coordinator_language": decision.get("language", "python"),
                 "conversation_history": conversation_history,
                 "model_usage": model_usage,
                 "next_node": "gui_operator",
@@ -428,35 +307,26 @@ Continue with the task or verify if completed. Current screenshot attached below
 
 
 def code_executor_node(state: AgentState) -> dict:
-    """Execute code (Python or Bash) in the desktop environment."""
+    """Execute bash commands in the desktop environment."""
     logger = logging.getLogger("desktopenv")
     
-    code = state["coordinator_content"]
-    lang = state["coordinator_language"]
+    bash_code = state["coordinator_content"]
     env = state["env"]
     operation_count = state["operation_count"] + 1
     
     logger.info(f"\n{'='*80}")
-    logger.info(f"[Code Execution] Operation #{operation_count}")
-    logger.info(f"Language: {lang}")
-    logger.info(f"Code:\n{code}")
+    logger.info(f"[Bash Execution] Operation #{operation_count}")
+    logger.info(f"Code:\n{bash_code}")
     logger.info("="*80)
     
     exitcode = 1
     logs = ""
     
     try:
-        if lang in ["bash", "shell", "sh"]:
-            output_dict = env.controller.run_bash_script(code, timeout=300)
-            exitcode = 0 if output_dict["status"] == "success" else 1
-            logs = output_dict["output"]
-        elif lang in PYTHON_VARIANTS:
-            output_dict = env.controller.run_python_script(code, timeout=300)
-            exitcode = 0 if output_dict["status"] != "error" else 1
-            logs = output_dict.get("message", output_dict.get("output", ""))
-        else:
-            exitcode = 1
-            logs = f"Unsupported language: {lang}"
+        # Always execute as bash script
+        output_dict = env.controller.run_bash_script(bash_code, timeout=300)
+        exitcode = 0 if output_dict["status"] == "success" else 1
+        logs = output_dict["output"]
     except Exception as e:
         exitcode = 1
         logs = f"Execution error: {str(e)}"
@@ -466,7 +336,7 @@ def code_executor_node(state: AgentState) -> dict:
     
     # Take screenshot after execution
     screenshot = env.controller.get_screenshot()
-    screenshot_filename = f"step_{operation_count}_code.png"
+    screenshot_filename = f"step_{operation_count}_bash.png"
     
     with open(os.path.join(state["operations_dir"], screenshot_filename), "wb") as f:
         f.write(screenshot)
@@ -474,16 +344,15 @@ def code_executor_node(state: AgentState) -> dict:
     # Log the action
     action_log = {
         "step": operation_count,
-        "type": "code_execution",
-        "language": lang,
-        "code": code,
+        "type": "bash_execution",
+        "code": bash_code,
         "exitcode": exitcode,
         "output": logs,
         "cost": 0.0,
         "screenshot": screenshot_filename
     }
     
-    result_message = f"Code execution {'succeeded' if success else 'failed'}.\nOutput:\n{logs}"
+    result_message = f"Bash execution {'succeeded' if success else 'failed'}.\nOutput:\n{logs}"
     logger.info(f"Exit code: {exitcode}")
     logger.info(f"Output: {logs[:500]}")
     
@@ -505,6 +374,7 @@ def gui_operator_node(state: AgentState) -> dict:
     context = state["coordinator_thought"]
     env = state["env"]
     operation_count = state["operation_count"] + 1
+    operator_model = state.get("operator_model", "computer-use-preview")
     
     logger.info(f"\n{'='*80}")
     logger.info(f"[GUI Operation] Operation #{operation_count}")
@@ -529,63 +399,64 @@ def gui_operator_node(state: AgentState) -> dict:
 # Instructions
 Analyze the current screenshot and execute the requested GUI operation."""
     
-    operator_prompt = OPERATOR_SYSTEM_MESSAGE.format(
-        instruction=task_instruction,
-        CLIENT_PASSWORD=state.get("client_password", "password")
-    )
-    
-    history_inputs = [{
-        "role": "user",
-        "content": [
-            {"type": "input_text", "text": operator_prompt},
-            {"type": "input_image", "image_url": f"data:image/png;base64,{screenshot_b64}"},
-        ],
-    }]
+    if operator_model == "computer-use-preview":
+        operator_prompt = CUA_SYSTEM_MESSAGE.format(
+            instruction=task_instruction,
+            CLIENT_PASSWORD=state.get("client_password", "password")
+        )
+        history_inputs = [{
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": operator_prompt},
+                {"type": "input_image", "image_url": f"data:image/png;base64,{screenshot_b64}"},
+            ],
+        }]
+    else:
+        system_prompt = OPERATOR_SYSTEM_MESSAGE.format(
+            CLIENT_PASSWORD=state.get("client_password", "password")
+        )
+        history_inputs = [{
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": system_prompt},
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": task_instruction},
+                    {"type": "image_url", "image_url": f"data:image/png;base64,{screenshot_b64}"},
+                ],
+            }
+        ]
     
     try:
-        client = OpenAI(api_key=OPENAI_API_KEY)
-        response, cost, input_tokens, output_tokens = call_openai_cua(
-            client, 
-            history_inputs, 
-            state.get("screen_width", 1920), 
-            state.get("screen_height", 1080),
-            model=state.get("operator_model", "computer-use-preview"),
-            logger=logger
-        )
-        
-        reasoning = ""
+        client = AbstractLLM(operator_model)
+        py_cmd, reasoning = client.call_cua(history_inputs, screen_width=state.get("screen_width", 1920), screen_height=state.get("screen_height", 1080), environment="linux")
+        cost, input_tokens, output_tokens, image_count = client.get_usage()
+
         executed_action = False
-        
-        for output_item in response.output:
-            output_type = output_item.get("type", "") if isinstance(output_item, dict) else getattr(output_item, "type", "")
-            
-            if "computer_call" in str(output_type):
-                action_call = output_item if isinstance(output_item, dict) else output_item.model_dump()
-                py_cmd = _cua_to_pyautogui(action_call["action"])
-                
+        if py_cmd:
+            try:
+                logger.info(f"[GUI command] {py_cmd}")
                 obs, *_ = env.step(py_cmd, state.get("sleep_after_execution", 0.5))
                 executed_action = True
-                logger.info(f"Executed: {py_cmd}")
-                
-            elif "reasoning" in str(output_type) and hasattr(output_item, 'summary') and len(output_item.summary) > 0:
-                reasoning = output_item.summary[0].text
-                logger.info(f"Reasoning: {reasoning}")
-                
-            elif "message" in str(output_type):
-                message_text = output_item.content[0].text if hasattr(output_item, 'content') else str(output_item)
-                reasoning = message_text
+            except Exception as e:
+                logger.error(f"GUI operation error: {e}")
+                logger.error(traceback.format_exc())
         
         if not reasoning:
             reasoning = "Executed GUI action" if executed_action else "No action executed"
-        
+
         # Update model usage
         model_usage = state.get("model_usage", {}).copy()
         if "operator" not in model_usage:
-            model_usage["operator"] = {"cost": 0.0, "prompt_tokens": 0, "completion_tokens": 0}
+            model_usage["operator"] = {"cost": 0.0, "prompt_tokens": 0, "completion_tokens": 0, "image_count": 0}
         model_usage["operator"]["cost"] += cost
         model_usage["operator"]["prompt_tokens"] += input_tokens
         model_usage["operator"]["completion_tokens"] += output_tokens
-        
+        model_usage["operator"]["image_count"] += image_count
+
         # Get updated screenshot
         screenshot = env.controller.get_screenshot()
         
@@ -652,7 +523,7 @@ def evaluator_node(state: AgentState) -> dict:
     
     # Calculate statistics
     cua_steps = len([log for log in state["action_logs"] if log["type"] == "gui_operator"])
-    code_steps = len([log for log in state["action_logs"] if log["type"] == "code_execution"])
+    bash_steps = len([log for log in state["action_logs"] if log["type"] == "bash_execution"])
     
     model_usage = state.get("model_usage", {})
     prompt_tokens = sum(model_usage[model]["prompt_tokens"] for model in model_usage)
@@ -660,7 +531,7 @@ def evaluator_node(state: AgentState) -> dict:
     total_cost = sum(model_usage[model]["cost"] for model in model_usage)
     
     logger.info(f"Score: {score}")
-    logger.info(f"Total operations: {state['operation_count']} (GUI: {cua_steps}, Code: {code_steps})")
+    logger.info(f"Total operations: {state['operation_count']} (GUI: {cua_steps}, Bash: {bash_steps})")
     logger.info(f"Total cost: ${total_cost:.4f}")
     logger.info(f"Tokens: {prompt_tokens} prompt + {completion_tokens} completion")
     
@@ -670,7 +541,7 @@ def evaluator_node(state: AgentState) -> dict:
             "score": score,
             "total_steps": state["operation_count"],
             "cua_steps": cua_steps,
-            "coding_steps": code_steps,
+            "coding_steps": bash_steps,
             "total_cost": total_cost,
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
@@ -762,7 +633,7 @@ def create_workflow() -> StateGraph:
 # ==================== FRAMEWORK ====================
 
 class MyAgentFramework:
-    """LangGraph-based dual agent framework."""
+    """LangGraph-based dual agent framework with bash-only execution."""
     
     def __init__(
         self,
@@ -843,7 +714,6 @@ class MyAgentFramework:
             "coordinator_thought": "",
             "coordinator_action": "",
             "coordinator_content": "",
-            "coordinator_language": "python",
             "last_execution_result": "",
             "last_execution_success": True,
             "action_logs": [],
@@ -864,7 +734,7 @@ class MyAgentFramework:
         }
         
         logger.info("\n" + "="*80)
-        logger.info("Starting LangGraph Workflow Execution")
+        logger.info("Starting LangGraph Workflow Execution (Bash-only)")
         logger.info("="*80)
         logger.info(f"Task: {task_config['instruction'][:100]}...")
         logger.info(f"Coordinator model: {self.coordinator_model}")
@@ -906,7 +776,7 @@ class MyAgentFramework:
                     "score": 0.0,
                     "total_steps": 0,
                     "cua_steps": 0,
-                    "coding_steps": 0,
+                    "bash_steps": 0,
                     "total_cost": 0.0,
                     "prompt_tokens": 0,
                     "completion_tokens": 0,
