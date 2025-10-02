@@ -10,7 +10,9 @@ python run_langgraph_agent.py --result_dir results/langgraph_o4mini_50_rag_verbo
 
 python run_langgraph_agent.py --result_dir results/langgraph_claude45_claude45_50_rag_verbose --snapshot config --coordinator_model claude-4.5 --operator_model claude-4.5 --max_steps 2 --rag --verbose_instruction --test_all_meta_path evaluation_examples/test_one.json --headless
 
-python run_langgraph_agent.py --result_dir results/langgraph_gemini25flash_claude45_50_rag_verbose --snapshot config --coordinator_model gemini-2.5-flash --operator_model claude-4.5 --max_steps 50 --rag --verbose_instruction --test_all_meta_path evaluation_examples/test_one.json --headless
+python run_langgraph_agent.py --result_dir results/langgraph_gemini25flash_qwen25vl72b_50_rag_verbose --snapshot config --coordinator_model gemini-2.5-flash --operator_model qwen2.5-vl-72b --max_steps 50 --rag --verbose_instruction --test_all_meta_path evaluation_examples/test_small.json --headless
+
+python run_langgraph_agent.py --result_dir results/langgraph_o4mini_qwen25vl72b_50_rag_verbose --snapshot config --coordinator_model gpt-o4-mini --operator_model qwen2.5-vl-72b --max_steps 50 --rag --verbose_instruction --test_all_meta_path evaluation_examples/test_small.json --headless
 
 #复现过程
 打开虚拟机改里面的内容，更新代码：/home/user/server/main.py，保存快照，确保分辨率为1920x1080

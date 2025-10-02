@@ -37,6 +37,8 @@ def process_single_task(
     headless = args.headless
     verbose_instruction = args.verbose_instruction
     test_config_base_dir = args.test_config_base_dir
+
+    logger.info(f"[Processing task] {domain}/{task_id}")
     
     # Setup result directory
     history_save_dir = os.path.join(result_dir, f"{domain}/{task_id}")
@@ -102,8 +104,8 @@ def process_single_task(
         return domain, score
         
     except Exception as e:
-        logger.info(f"Error processing task {domain}/{task_id}")
-        print(traceback.format_exc())
+        logger.error(f"Error processing task {domain}/{task_id}")
+        logger.error(traceback.format_exc())
         score = 0.0
         
         # Save error information
@@ -196,9 +198,8 @@ def main():
     logger.addHandler(file_handler)
     logger.addHandler(debug_handler)
     logger.addHandler(stdout_handler)
-    #  }}} Logger Configs #
 
-    logger = logging.getLogger("desktopenv.expeiment")
+    logger = logging.getLogger("desktopenv")
 
     # Load test metadata
     with open(args.test_all_meta_path, encoding="utf-8") as f:
@@ -231,7 +232,7 @@ def main():
                         should_skip = True
                 
                 if should_skip:
-                    print(f"Results already exist in {domain}/{task_id}, result: {result}")
+                    logger.info(f"Results already exist in {domain}/{task_id}, result: {result}")
                 else:
                     # Clean up existing directory and add to tasks
                     if os.path.exists(target_dir):

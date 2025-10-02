@@ -309,9 +309,7 @@ class DesktopEnv(gym.Env):
                 expected = self.evaluator["expected"][idx]
                 expected_state = self.expected_getter[idx](self, expected) if expected else None
 
-                metric: int = metric(result_state, expected_state,
-                                     **self.metric_options[idx]) if expected_state is not None \
-                    else metric(result_state, **self.metric_options[idx])
+                metric: int = metric(result_state, expected_state, **self.metric_options[idx]) if expected_state is not None else metric(result_state, **self.metric_options[idx])
 
                 if self.metric_conj == 'and' and float(metric) == 0.0:
                     return 0

@@ -10,8 +10,9 @@ import io
 from dataclasses import dataclass
 from typing import Any, Tuple, Optional
 from configs.config import *
-import openai
 from openai import OpenAI
+import logging
+import sys
 
 # Fix numpy import issue in CUDA environment
 os.environ["NUMPY_EXPERIMENTAL_ARRAY_FUNCTION"] = "0"
@@ -55,7 +56,7 @@ class ModelConfig:
 MODEL_CONFIGS = {
     "gpt-4o": ModelConfig("Road2allAPI", "gpt-4o-2024-05-13", True, 2.5, 10, 3.613),
     "gpt-o3": ModelConfig("Road2allAPI", "gpt-o3", True, 2, 8, 1.53),
-    "gpt-o4-mini": ModelConfig("Road2allAPI", "gpt-o4-mini", True, 1.1, 4.4, 0.842),
+    "gpt-o4-mini": ModelConfig("OpenRouterAPI", "openai/o4-mini", True, 1.1, 4.4, 0.842),
     "computer-use-preview": ModelConfig("OpenAIAPI", "computer-use-preview", True, 3, 12, 0),
     "claude-3.5": ModelConfig("Road2allAPI", "claude-3-5-sonnet-20240620", True, 3, 15, 4.8),
     "claude-4": ModelConfig("Road2allAPI", "claude-sonnet-4-20250514", True, 3, 15, 4.8),
@@ -218,11 +219,11 @@ class OpenAIAPI(BaseLLMClient):
             if "computer_call" in str(output_type):
                 action_call = output_item if isinstance(output_item, dict) else output_item.model_dump()
                 py_cmd = self._cua_to_pyautogui(action_call["action"])
-                print(f"Executed: {py_cmd}")
+                self.logger.info(f"Executed: {py_cmd}")
                 
             elif "reasoning" in str(output_type) and hasattr(output_item, 'summary') and len(output_item.summary) > 0:
                 reasoning = output_item.summary[0].text
-                print(f"Reasoning: {reasoning}")
+                self.logger.info(f"Reasoning: {reasoning}")
                 
             elif "message" in str(output_type):
                 message_text = output_item.content[0].text if hasattr(output_item, 'content') else str(output_item)
@@ -326,7 +327,7 @@ class Road2allAPI(BaseLLMClient):
                 py_cmd = py_cmd.split("```python")[1].split("```")[0]
                 break
             else:
-                print("Invalid response format, retrying: ", py_cmd)
+                self.logger.info(f"Invalid response format, retrying: {py_cmd}")
                 messages.append({
                     "role": "user",
                     "content": [
@@ -360,7 +361,7 @@ class OpenRouterAPI(BaseLLMClient):
         if response.status_code == 200:
             result_json = response.json()
             if "choices" not in result_json:
-                print(result_json)
+                self.logger.error(f"Invalid response format: {result_json}")
                 raise Exception("Invalid response format")
             
             result = result_json["choices"][0]["message"]["content"]
@@ -383,7 +384,7 @@ class OpenRouterAPI(BaseLLMClient):
                 py_cmd = py_cmd.split("```python")[1].split("```")[0]
                 break
             else:
-                print("Invalid response format, retrying: ", py_cmd)
+                self.logger.info(f"Invalid response format, retrying: {py_cmd}")
                 messages.append({
                     "role": "user",
                     "content": [
@@ -398,7 +399,7 @@ class AbstractLLM:
     LLM abstraction layer providing unified interface and retry mechanism
     """
     
-    def __init__(self, model_name: str, temperature: float = 0.1, max_tokens: int = 4096):
+    def __init__(self, model_name: str, temperature: float = 0.1, max_tokens: int = 4096, logger: logging.Logger = logging.getLogger("default")):
         """
         Initialize LLM instance
         
@@ -407,6 +408,12 @@ class AbstractLLM:
             temperature: Sampling temperature
             max_tokens: Maximum number of tokens
         """
+        if not logger.handlers:
+            handler = logging.StreamHandler(sys.stdout)
+            handler.setFormatter(logging.Formatter('%(levelname)s - %(message)s'))
+            logger.addHandler(handler)
+            logger.setLevel(logging.DEBUG)
+
         if model_name not in MODEL_CONFIGS:
             raise ValueError(f"Model {model_name} not supported")
         
@@ -421,6 +428,8 @@ class AbstractLLM:
         client_class = globals()[self.model_config.client_class]
         self.client = client_class(self.model_config.real_model_name, temperature, max_tokens)
         self.is_vlm = self.model_config.is_vlm
+        self.logger = logger
+        self.client.logger = logger
     
     def __call__(self, messages: list, max_retries: int = 3) -> Optional[str]:
         """
@@ -443,20 +452,20 @@ class AbstractLLM:
                 return response
             
             except TimeoutError:
-                print(f"Attempt {attempt + 1}/{max_retries}: LLM call timed out after {self.timeout_seconds} seconds")
+                self.logger.error(f"Attempt {attempt + 1}/{max_retries}: LLM call timed out after {self.timeout_seconds} seconds")
                 if attempt < max_retries - 1:
                     wait_time = (attempt + 1) * 5
-                    print(f"Waiting {wait_time} seconds before retry...")
+                    self.logger.error(f"Waiting {wait_time} seconds before retry...")
                     time.sleep(wait_time)
             
             except Exception as e:
-                print(f"Attempt {attempt + 1}/{max_retries}: LLM call failed with error: {e}")
+                self.logger.error(f"Attempt {attempt + 1}/{max_retries}: LLM call failed with error: {e}")
                 if attempt < max_retries - 1:
                     wait_time = (attempt + 1) * 5
-                    print(f"Waiting {wait_time} seconds before retry...")
+                    self.logger.error(f"Waiting {wait_time} seconds before retry...")
                     time.sleep(wait_time)
         
-        print(f"All {max_retries} attempts failed")
+        self.logger.info(f"All {max_retries} attempts failed")
         return None
     
     def call_cua(self, messages: list, **kwargs) -> Tuple[str, str]:
@@ -492,12 +501,12 @@ if __name__ == "__main__":
     ]
     
     response = llm(messages)
-    print("Response:", response)
+    llm.logger.info(f"Response: {response}")
     
     # Get cost information
     cost, prompt_tokens, completion_tokens, image_count = llm.get_usage()
-    print(f"\nUsage Statistics:")
-    print(f"Cost: ${cost:.6f}")
-    print(f"Prompt tokens: {prompt_tokens}")
-    print(f"Completion tokens: {completion_tokens}")
-    print(f"Images: {image_count}")
+    llm.logger.info(f"\nUsage Statistics:")
+    llm.logger.info(f"Cost: ${cost:.6f}")
+    llm.logger.info(f"Prompt tokens: {prompt_tokens}")
+    llm.logger.info(f"Completion tokens: {completion_tokens}")
+    llm.logger.info(f"Images: {image_count}")
