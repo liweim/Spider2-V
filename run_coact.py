@@ -65,9 +65,9 @@ def config() -> argparse.Namespace:
 
     # agent config
     parser.add_argument("--oai_config_path", type=str, default="mm_agents/coact/OAI_CONFIG_LIST")
-    parser.add_argument("--orchestrator_model", type=str, default="o3")
-    parser.add_argument("--coding_model", type=str, default="o4-mini")
-    parser.add_argument("--summarizer_model", type=str, default="o4-mini")
+    parser.add_argument("--orchestrator_model", type=str, default="o3-2025-04-16")
+    parser.add_argument("--coding_model", type=str, default="o4-mini-2025-04-16")
+    parser.add_argument("--summarizer_model", type=str, default="o4-mini-2025-04-16")
     parser.add_argument("--cua_model", type=str, default="computer-use-preview")
     parser.add_argument("--orchestrator_max_steps", type=int, default=15) #15
     parser.add_argument("--coding_max_steps", type=int, default=20) #20
@@ -313,7 +313,104 @@ def process_task(task_info,
         with open(os.path.join(history_save_dir, f'result.txt'), "w") as f:
             f.write(str(score))
         with open(os.path.join(history_save_dir, f'err_reason.txt'), "w") as f:
-            f.write(f"Fatal error: {str(e)}")
+            f.write(f"Fatal error: {str(e)}\n\n{traceback.format_exc()}")
+        
+        # Collect usage even on failure
+        try:
+            model_usage = {}
+            prompt_tokens = 0
+            completion_tokens = 0
+            total_cost = 0.0
+            total_image_count = 0
+            
+            # Try to get orchestrator usage if available
+            if 'orchestrator' in locals() and orchestrator is not None:
+                try:
+                    orchestrator_usage = orchestrator.get_total_usage().get(orchestrator_model, {})
+                    orchestrator_prompt_tokens = orchestrator_usage.get('prompt_tokens', 0)
+                    orchestrator_completion_tokens = orchestrator_usage.get('completion_tokens', 0)
+                    prompt_price, completion_price, image_price = get_price(orchestrator_model)
+                    orchestrator_cost = orchestrator_prompt_tokens * prompt_price + orchestrator_completion_tokens * completion_price + image_price
+                    
+                    model_usage["orchestrator"] = {
+                        "cost": orchestrator_cost,
+                        "prompt_tokens": orchestrator_prompt_tokens,
+                        "completion_tokens": orchestrator_completion_tokens,
+                        "image_count": 1
+                    }
+                except Exception as usage_err:
+                    print(f"Warning: Failed to collect orchestrator usage: {usage_err}")
+            
+            # Try to get proxy usage if available
+            if 'orchestrator_proxy' in locals() and orchestrator_proxy is not None:
+                try:
+                    if hasattr(orchestrator_proxy, 'model_usage'):
+                        for model_key, usage_data in orchestrator_proxy.model_usage.items():
+                            model_usage[model_key] = usage_data
+                except Exception as usage_err:
+                    print(f"Warning: Failed to collect proxy usage: {usage_err}")
+            
+            # Calculate totals
+            if model_usage:
+                prompt_tokens = sum(model_usage[model]["prompt_tokens"] for model in model_usage)
+                completion_tokens = sum(model_usage[model]["completion_tokens"] for model in model_usage)
+                total_cost = sum(model_usage[model]["cost"] for model in model_usage)
+                total_image_count = sum(model_usage[model]["image_count"] for model in model_usage)
+            
+            # Count steps
+            cua_steps = len(glob.glob(f"{history_save_dir}/cua_output*/step_*.png"))
+            coding_paths = glob.glob(f"{history_save_dir}/coding_output*/chat_history.json")
+            coding_steps = 0
+            for hist in coding_paths:
+                try:
+                    with open(hist, 'r') as f:
+                        hist_content = json.dumps(json.load(f))
+                        coding_steps += hist_content.count('exitcode:')
+                except:
+                    pass
+            
+            # Get action logs if available
+            action_logs = []
+            if 'orchestrator_proxy' in locals() and orchestrator_proxy is not None:
+                try:
+                    if hasattr(orchestrator_proxy, 'action_logs'):
+                        action_logs = orchestrator_proxy.action_logs
+                except:
+                    pass
+            
+            # Save partial execution log with error info
+            error_log = {
+                "error": str(e),
+                "traceback": traceback.format_exc(),
+                "statistics": {
+                    "score": score,
+                    "total_steps": cua_steps + coding_steps,
+                    "cua_steps": cua_steps,
+                    "coding_steps": coding_steps,
+                    "image_count": total_image_count,
+                    "total_cost": total_cost,
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "model_usage": model_usage
+                },
+                "task_config": task_config if 'task_config' in locals() else {},
+                "action_logs": action_logs
+            }
+            
+            with open(os.path.join(history_save_dir, "execution_log.json"), "w") as f:
+                json.dump(serialize_json(error_log), f, indent=2)
+            
+            print(f"Partial token usage saved - Cost: ${total_cost:.4f}, Total tokens: {prompt_tokens + completion_tokens}")
+        except Exception as log_err:
+            print(f"Warning: Failed to save partial execution log: {log_err}")
+        
+        # Try to close environment
+        try:
+            if 'orchestrator_proxy' in locals() and orchestrator_proxy is not None:
+                if orchestrator_proxy.env is not None:
+                    orchestrator_proxy.env.close()
+        except:
+            pass
     
     return domain, score
 

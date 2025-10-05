@@ -55,7 +55,9 @@ class ModelConfig:
 MODEL_CONFIGS = {
     "gpt-4o": ModelConfig("OpenAIAPI", "gpt-4o", 2.5, 10, 3.613),
     "o3": ModelConfig("OpenAIAPI", "o3", 2, 8, 1.53),
+    "o3-2025-04-16": ModelConfig("OpenAIAPI", "o3-2025-04-16", 2, 8, 1.53),
     "o4-mini": ModelConfig("OpenAIAPI", "o4-mini", 1.1, 4.4, 0.842),
+    "o4-mini-2025-04-16": ModelConfig("OpenAIAPI", "o4-mini-2025-04-16", 1.1, 4.4, 0.842),
     "gpt-5": ModelConfig("OpenAIAPI", "gpt-5", 1.25, 10, 0),
     "computer-use-preview": ModelConfig("OpenAIAPI", "computer-use-preview", 3, 12, 0),
     "claude-3.5": ModelConfig("Road2allAPI", "claude-3-5-sonnet-20240620", 3, 15, 4.8),

@@ -163,8 +163,8 @@ class OrchestratorUserProxyAgent(MultimodalConversableAgent):
         coding_max_steps: int = 30,
         cut_off_steps: int = 200,
         history_save_dir: str = "",
-        coding_model: str = "o4-mini",
-        summarizer_model: str = "o4-mini",
+        coding_model: str = "o4-mini-2025-04-16",
+        summarizer_model: str = "o4-mini-2025-04-16",
         cua_model: str = "computer-use-preview",
         client_password: str = "",
         user_instruction: str = "",
@@ -273,6 +273,15 @@ class OrchestratorUserProxyAgent(MultimodalConversableAgent):
         cua_path = os.path.join(self.history_save_dir, f'cua_output_{self.cua_call_count}')
         if not os.path.exists(cua_path):
             os.makedirs(cua_path)
+        
+        # Initialize variables to track usage even on failure
+        cost = 0.0
+        input_tokens = 0
+        output_tokens = 0
+        image_count = 0
+        result = "ERROR"
+        history_inputs = []
+        
         try:
             history_inputs, result, cost, input_tokens, output_tokens, image_count = run_cua(self.env,
                                                    task,
@@ -306,8 +315,24 @@ class OrchestratorUserProxyAgent(MultimodalConversableAgent):
                 "model": self.cua_model,
             }
             self.action_logs.append(action_log)
+
+        except Exception as e:
+            # Record error in action log even when failed
+            action_log = {
+                "call_index": self.cua_call_count,
+                "type": "gui_operator",
+                "task": task,
+                "result": f"ERROR: {str(e)}",
+                "cost": cost,
+                "steps": len(glob.glob(f"{cua_path}/step_*.png")),
+                "save_path": cua_path,
+                "model": self.cua_model,
+                "error": traceback.format_exc()
+            }
+            self.action_logs.append(action_log)
             
-            # Update model-specific usage
+        finally:
+            # Always update model-specific usage regardless of success or failure
             if "cua" not in self.model_usage:
                 self.model_usage["cua"] = {"cost": 0.0, "prompt_tokens": 0, "completion_tokens": 0, "image_count": 0}
             self.model_usage["cua"]["cost"] += cost
@@ -316,9 +341,9 @@ class OrchestratorUserProxyAgent(MultimodalConversableAgent):
             self.model_usage["cua"]["image_count"] += image_count
             
             self.cua_call_count += 1
-
-        except Exception:
-            return f"# Response from GUI agent error: {traceback.format_exc()}"
+        
+        if "ERROR" in result:
+            return f"# Response from GUI agent error: {result}"
 
         if "TERMINATE" in result:
             result = result.replace("TERMINATE", "").strip()
@@ -333,6 +358,14 @@ class OrchestratorUserProxyAgent(MultimodalConversableAgent):
     def _call_coding_agent(self, task: str, environment: str) -> str:
         """Run a coding agent to solve the task."""
         default_auto_reply = "I'm a code interpreter and I can only execute your code or end the conversation. If you think the problem is solved, please reply me only with 'TERMINATE'."
+        
+        # Initialize variables to track usage even on failure
+        coding_agent = None
+        summarizer = None
+        code_interpreter = None
+        summarized_history = "ERROR: Task execution failed"
+        coding_output_path = os.path.join(self.history_save_dir, f'coding_output_{self.coding_call_count}')
+        
         try:
             screenshot = self.env.controller.get_screenshot()
             coding_agent = MultimodalConversableAgent(
@@ -376,17 +409,26 @@ class OrchestratorUserProxyAgent(MultimodalConversableAgent):
                         content['image_url']['url'] = '<image>'
                 chat_history.append(item)
             
-            if not os.path.exists(os.path.join(self.history_save_dir, f'coding_output_{self.coding_call_count}')):
-                os.makedirs(os.path.join(self.history_save_dir, f'coding_output_{self.coding_call_count}'))
-                
-            coding_output_path = os.path.join(self.history_save_dir, f'coding_output_{self.coding_call_count}')
+            if not os.path.exists(coding_output_path):
+                os.makedirs(coding_output_path)
+            
             with open(os.path.join(coding_output_path, "chat_history.json"), "w") as f:
                 json.dump(chat_history, f)
             
             # Count coding steps (number of exitcode occurrences)
             coding_steps = json.dumps(chat_history).count('exitcode:')
             
-            # Record action log for statistics
+            # Review the group chat history
+            summarized_history = summarizer.generate_oai_reply(
+                messages=[
+                    {
+                        "role": "user",
+                        "content": self.CONVERSATION_REVIEW_PROMPT.format(chat_history=chat_history),
+                    }
+                ]
+            )[1]
+            
+            # Record action log for statistics (success case)
             action_log = {
                 "call_index": self.coding_call_count,
                 "type": "code_execution", 
@@ -398,46 +440,50 @@ class OrchestratorUserProxyAgent(MultimodalConversableAgent):
             }
             self.action_logs.append(action_log)
 
-            self.coding_call_count += 1
-
-            # Review the group chat history
-            summarized_history = summarizer.generate_oai_reply(
-                messages=[
-                    {
-                        "role": "user",
-                        "content": self.CONVERSATION_REVIEW_PROMPT.format(chat_history=chat_history),
-                    }
-                ]
-            )[1]
-
-        except Exception:
-            return f"# Call coding agent error: {traceback.format_exc()}"
+        except Exception as e:
+            # Record error in action log even when failed
+            error_msg = traceback.format_exc()
+            action_log = {
+                "call_index": self.coding_call_count,
+                "type": "code_execution", 
+                "task": task,
+                "environment": environment,
+                "steps": 0,
+                "model": self.coding_model,
+                "save_path": coding_output_path,
+                "error": error_msg
+            }
+            self.action_logs.append(action_log)
+            summarized_history = f"ERROR: {str(e)}"
         
         finally:
+            # Always update model-specific usage regardless of success or failure
             if coding_agent:
                 coding_usage = coding_agent.get_total_usage()
-                if "coding" not in self.model_usage:
-                    self.model_usage["coding"] = {"cost": 0.0, "prompt_tokens": 0, "completion_tokens": 0, "image_count": 0}
-                prompt_tokens = coding_usage[self.coding_model].get("prompt_tokens", 0)
-                completion_tokens = coding_usage[self.coding_model].get("completion_tokens", 0)
-                prompt_price, completion_price, image_price = get_price(self.coding_model)
-                cost = prompt_tokens * prompt_price + completion_tokens * completion_price + image_price
-                self.model_usage["coding"]["cost"] += cost
-                self.model_usage["coding"]["prompt_tokens"] += prompt_tokens
-                self.model_usage["coding"]["completion_tokens"] += completion_tokens
-                self.model_usage["coding"]["image_count"] += 1
+                if self.coding_model in coding_usage:
+                    if "coding" not in self.model_usage:
+                        self.model_usage["coding"] = {"cost": 0.0, "prompt_tokens": 0, "completion_tokens": 0, "image_count": 0}
+                    prompt_tokens = coding_usage[self.coding_model].get("prompt_tokens", 0)
+                    completion_tokens = coding_usage[self.coding_model].get("completion_tokens", 0)
+                    prompt_price, completion_price, image_price = get_price(self.coding_model)
+                    cost = prompt_tokens * prompt_price + completion_tokens * completion_price + image_price
+                    self.model_usage["coding"]["cost"] += cost
+                    self.model_usage["coding"]["prompt_tokens"] += prompt_tokens
+                    self.model_usage["coding"]["completion_tokens"] += completion_tokens
+                    self.model_usage["coding"]["image_count"] += 1
 
             if summarizer:
                 summarizer_usage = summarizer.get_total_usage()
-                if "summarizer" not in self.model_usage:
-                    self.model_usage["summarizer"] = {"cost": 0.0, "prompt_tokens": 0, "completion_tokens": 0, "image_count": 0}
-                prompt_tokens = summarizer_usage[self.summarizer_model].get("prompt_tokens", 0)
-                completion_tokens = summarizer_usage[self.summarizer_model].get("completion_tokens", 0)
-                prompt_price, completion_price, image_price = get_price(self.summarizer_model)
-                cost = prompt_tokens * prompt_price + completion_tokens * completion_price
-                self.model_usage["summarizer"]["cost"] += cost
-                self.model_usage["summarizer"]["prompt_tokens"] += prompt_tokens
-                self.model_usage["summarizer"]["completion_tokens"] += completion_tokens
+                if self.summarizer_model in summarizer_usage:
+                    if "summarizer" not in self.model_usage:
+                        self.model_usage["summarizer"] = {"cost": 0.0, "prompt_tokens": 0, "completion_tokens": 0, "image_count": 0}
+                    prompt_tokens = summarizer_usage[self.summarizer_model].get("prompt_tokens", 0)
+                    completion_tokens = summarizer_usage[self.summarizer_model].get("completion_tokens", 0)
+                    prompt_price, completion_price, image_price = get_price(self.summarizer_model)
+                    cost = prompt_tokens * prompt_price + completion_tokens * completion_price
+                    self.model_usage["summarizer"]["cost"] += cost
+                    self.model_usage["summarizer"]["prompt_tokens"] += prompt_tokens
+                    self.model_usage["summarizer"]["completion_tokens"] += completion_tokens
 
         screenshot = self.env.controller.get_screenshot()
         return f"# Response from coding agent: {summarized_history}"
