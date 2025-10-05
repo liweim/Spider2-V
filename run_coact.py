@@ -14,8 +14,7 @@ import logging
 from multiprocessing import Pool, cpu_count
 from functools import partial
 import sys
-from utils import build_additional_contexts, summary, serialize_json, save_args_to_settings
-from llm import AbstractLLM
+from utils import build_additional_contexts, summary, serialize_json, save_args_to_settings, get_price
 
 
 TASK_DESCRIPTION = """# Your role
@@ -261,13 +260,8 @@ def process_task(task_info,
         orchestrator_usage = orchestrator.get_total_usage().get(orchestrator_model)
         orchestrator_prompt_tokens = orchestrator_usage.get('prompt_tokens')
         orchestrator_completion_tokens = orchestrator_usage.get('completion_tokens')
-        
-        # Use AbstractLLM to calculate cost
-        orchestrator_llm = AbstractLLM(orchestrator_model, logger=logger)
-        orchestrator_llm.client.usage_stats.prompt_tokens = orchestrator_prompt_tokens
-        orchestrator_llm.client.usage_stats.completion_tokens = orchestrator_completion_tokens
-        orchestrator_llm.client.usage_stats.image_count = 1
-        orchestrator_cost, _, _, _ = orchestrator_llm.get_usage()
+        prompt_price, completion_price, image_price = get_price(orchestrator_model)
+        orchestrator_cost = orchestrator_prompt_tokens * prompt_price + orchestrator_completion_tokens * completion_price + image_price
 
         model_usage = orchestrator_proxy.model_usage
         model_usage["orchestrator"] = {

@@ -16,7 +16,7 @@ from .autogen.agentchat.contrib.multimodal_conversable_agent import MultimodalCo
 
 from .cua_agent import run_cua
 from .coding_agent import TerminalProxyAgent, CODER_SYSTEM_MESSAGE
-from llm import AbstractLLM
+from utils import get_price
 
 ONLY_CUA = False #False 更新
 
@@ -415,40 +415,26 @@ class OrchestratorUserProxyAgent(MultimodalConversableAgent):
         
         finally:
             if coding_agent:
-                # Use AbstractLLM to calculate cost
-                coding_llm = AbstractLLM(self.coding_model, logger=logging.getLogger("desktopenv"))
                 coding_usage = coding_agent.get_total_usage()
                 if "coding" not in self.model_usage:
                     self.model_usage["coding"] = {"cost": 0.0, "prompt_tokens": 0, "completion_tokens": 0, "image_count": 0}
                 prompt_tokens = coding_usage[self.coding_model].get("prompt_tokens", 0)
                 completion_tokens = coding_usage[self.coding_model].get("completion_tokens", 0)
-                
-                # Use AbstractLLM's cost calculation
-                coding_llm.client.usage_stats.prompt_tokens = prompt_tokens
-                coding_llm.client.usage_stats.completion_tokens = completion_tokens
-                coding_llm.client.usage_stats.image_count = 1
-                cost, _, _, _ = coding_llm.get_usage()
-                
+                prompt_price, completion_price, image_price = get_price(self.coding_model)
+                cost = prompt_tokens * prompt_price + completion_tokens * completion_price + image_price
                 self.model_usage["coding"]["cost"] += cost
                 self.model_usage["coding"]["prompt_tokens"] += prompt_tokens
                 self.model_usage["coding"]["completion_tokens"] += completion_tokens
                 self.model_usage["coding"]["image_count"] += 1
 
             if summarizer:
-                # Use AbstractLLM to calculate cost
-                summarizer_llm = AbstractLLM(self.summarizer_model, logger=logging.getLogger("desktopenv"))
                 summarizer_usage = summarizer.get_total_usage()
                 if "summarizer" not in self.model_usage:
                     self.model_usage["summarizer"] = {"cost": 0.0, "prompt_tokens": 0, "completion_tokens": 0, "image_count": 0}
                 prompt_tokens = summarizer_usage[self.summarizer_model].get("prompt_tokens", 0)
                 completion_tokens = summarizer_usage[self.summarizer_model].get("completion_tokens", 0)
-                
-                # Use AbstractLLM's cost calculation
-                summarizer_llm.client.usage_stats.prompt_tokens = prompt_tokens
-                summarizer_llm.client.usage_stats.completion_tokens = completion_tokens
-                summarizer_llm.client.usage_stats.image_count = 0
-                cost, _, _, _ = summarizer_llm.get_usage()
-                
+                prompt_price, completion_price, image_price = get_price(self.summarizer_model)
+                cost = prompt_tokens * prompt_price + completion_tokens * completion_price
                 self.model_usage["summarizer"]["cost"] += cost
                 self.model_usage["summarizer"]["prompt_tokens"] += prompt_tokens
                 self.model_usage["summarizer"]["completion_tokens"] += completion_tokens
