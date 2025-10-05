@@ -8,7 +8,7 @@ import json
 import base64
 import io
 from dataclasses import dataclass
-from typing import Any, Tuple, Optional
+from typing import Any, Tuple, Optional, List, Dict
 from configs.config import *
 from openai import OpenAI
 import logging
@@ -37,7 +37,6 @@ class ModelConfig:
     """Complete configuration for a model including client and pricing"""
     client_class: str  # Name of the API client class
     real_model_name: str  # Actual model name used by the API
-    is_vlm: bool # Whether the model is a VLM model
     prompt_price: float  # per 1M tokens
     completion_price: float  # per 1M tokens
     image_price: float  # per 1K images
@@ -54,20 +53,21 @@ class ModelConfig:
 
 # Unified model configuration table
 MODEL_CONFIGS = {
-    "gpt-4o": ModelConfig("Road2allAPI", "gpt-4o-2024-05-13", True, 2.5, 10, 3.613),
-    "gpt-o3": ModelConfig("Road2allAPI", "gpt-o3", True, 2, 8, 1.53),
-    "gpt-o4-mini": ModelConfig("OpenRouterAPI", "openai/o4-mini", True, 1.1, 4.4, 0.842),
-    "computer-use-preview": ModelConfig("OpenAIAPI", "computer-use-preview", True, 3, 12, 0),
-    "claude-3.5": ModelConfig("Road2allAPI", "claude-3-5-sonnet-20240620", True, 3, 15, 4.8),
-    "claude-4": ModelConfig("Road2allAPI", "claude-sonnet-4-20250514", True, 3, 15, 4.8),
-    "claude-4.5": ModelConfig("OpenRouterAPI", "anthropic/claude-sonnet-4.5", True, 3, 15, 4.8),
-    "deepseek-v3": ModelConfig("Road2allAPI", "deepseek-v3", False, 0.24, 0.84, 0),
-    "deepseek-r1": ModelConfig("Road2allAPI", "deepseek-reasoner", False, 0.4, 1.75, 0),
-    "deepseek-v3.1": ModelConfig("OpenRouterAPI", "deepseek/deepseek-chat-v3.1:free", False, 0.2, 0.8, 0),
-    "qwen2.5-vl-72b": ModelConfig("OpenRouterAPI", "qwen/qwen2.5-vl-72b-instruct", True, 0.07, 0.28, 0),
-    "qwen3": ModelConfig("OpenRouterAPI", "qwen/qwen3-235b-a22b:free", False, 0, 0, 0),
-    "gemini-2.5-pro": ModelConfig("Road2allAPI", "gemini-2.5-pro-preview-05-06", True, 1.25, 10, 5.16),
-    "gemini-2.5-flash": ModelConfig("OpenRouterAPI", "google/gemini-2.5-flash", True, 0.3, 2.5, 1.238),
+    "gpt-4o": ModelConfig("OpenAIAPI", "gpt-4o", 2.5, 10, 3.613),
+    "o3": ModelConfig("OpenAIAPI", "o3", 2, 8, 1.53),
+    "o4-mini": ModelConfig("OpenAIAPI", "o4-mini", 1.1, 4.4, 0.842),
+    "gpt-5": ModelConfig("OpenAIAPI", "gpt-5", 1.25, 10, 0),
+    "computer-use-preview": ModelConfig("OpenAIAPI", "computer-use-preview", 3, 12, 0),
+    "claude-3.5": ModelConfig("Road2allAPI", "claude-3-5-sonnet-20240620", 3, 15, 4.8),
+    "claude-4": ModelConfig("Road2allAPI", "claude-sonnet-4-20250514", 3, 15, 4.8),
+    "claude-4.5": ModelConfig("OpenRouterAPI", "anthropic/claude-sonnet-4.5", 3, 15, 4.8),
+    "deepseek-v3": ModelConfig("Road2allAPI", "deepseek-v3", 0.24, 0.84, 0),
+    "deepseek-r1": ModelConfig("Road2allAPI", "deepseek-reasoner", 0.4, 1.75, 0),
+    "deepseek-v3.1": ModelConfig("OpenRouterAPI", "deepseek/deepseek-chat-v3.1:free", 0.2, 0.8, 0),
+    "qwen2.5-vl-72b": ModelConfig("OpenRouterAPI", "qwen/qwen2.5-vl-72b-instruct", 0.07, 0.28, 0),
+    "qwen3": ModelConfig("OpenRouterAPI", "qwen/qwen3-235b-a22b:free", 0, 0, 0),
+    "gemini-2.5-pro": ModelConfig("Road2allAPI", "gemini-2.5-pro-preview-05-06", 1.25, 10, 5.16),
+    "gemini-2.5-flash": ModelConfig("OpenRouterAPI", "google/gemini-2.5-flash", 0.3, 2.5, 1.238),
 }
 
 
@@ -86,6 +86,7 @@ def resize_image(img, max_size=1024):
 
 def encode_image(image: Image.Image) -> str:
     """Encode PIL image to base64 string"""
+    image = image.convert("RGB")
     buffer = io.BytesIO()
     image.save(buffer, format="JPEG")
     buffer.seek(0)
@@ -99,7 +100,7 @@ def count_images_in_messages(messages: list) -> int:
     for message in messages:
         if isinstance(message.get("content"), list):
             for content in message["content"]:
-                if content.get("type") == "image_url":
+                if content.get("type") in ["image_url", "image", "input_image"]:
                     count += 1
     return count
 
@@ -137,6 +138,162 @@ def with_timeout(timeout_seconds):
     return decorator
 
 
+class MessageFormatter:
+    """Base class for message format adaptation"""
+    
+    @staticmethod
+    def normalize_messages(messages: List[Dict]) -> List[Dict]:
+        """
+        Normalize messages to a standard format (OpenAI style)
+        This is the format we use internally across all APIs:
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "..."},
+                {"type": "input_image", "image_url": "data:image/jpeg;base64,..."}
+            ]
+        }
+        """
+        return messages
+    
+    @staticmethod
+    def format_for_api(messages: List[Dict]) -> Any:
+        """
+        Convert normalized messages to API-specific format
+        Must be implemented by subclasses
+        """
+        raise NotImplementedError
+
+class OpenRouterMessageFormatter(MessageFormatter):
+    """OpenRouter API message formatter - converts OpenAI format to standard format"""
+    
+    @staticmethod
+    def format_for_api(messages: List[Dict]) -> List[Dict]:
+        """
+        Convert from OpenAI format to OpenRouter format:
+        OpenAI format (input):
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "..."},
+                {"type": "input_image", "image_url": "data:image/jpeg;base64,..."}
+            ]
+        }
+        
+        OpenRouter format (output):
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "..."},
+                {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,..."}}
+            ]
+        }
+        """
+        formatted = []
+        for msg in messages:
+            formatted_msg = {"role": msg["role"]}
+            
+            if isinstance(msg["content"], list):
+                # Convert content items to OpenRouter format
+                content_list = []
+                for item in msg["content"]:
+                    if item.get("type") == "input_text":
+                        # Convert "input_text" to "text"
+                        content_list.append({
+                            "type": "text",
+                            "text": item["text"]
+                        })
+                    elif item.get("type") == "input_image":
+                        # Convert "input_image" to "image_url" with nested structure
+                        content_list.append({
+                            "type": "image_url",
+                            "image_url": {"url": item["image_url"]}
+                        })
+                    elif item.get("type") == "text":
+                        # Already in correct format
+                        content_list.append(item)
+                    elif item.get("type") == "image_url":
+                        # Already in correct format
+                        content_list.append(item)
+                    else:
+                        # Keep other types as-is (fallback)
+                        content_list.append(item)
+                
+                formatted_msg["content"] = content_list
+            else:
+                # Simple text message - keep as string
+                formatted_msg["content"] = msg["content"]
+            
+            formatted.append(formatted_msg)
+        
+        return formatted
+
+
+class Road2allMessageFormatter(MessageFormatter):
+    """Road2all API message formatter - converts OpenAI format to standard format"""
+    
+    @staticmethod
+    def format_for_api(messages: List[Dict]) -> List[Dict]:
+        """
+        Convert from OpenAI format to Road2all format:
+        OpenAI format (input):
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "..."},
+                {"type": "input_image", "image_url": "data:image/jpeg;base64,..."}
+            ]
+        }
+        
+        Road2all format (output):
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "..."},
+                {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,..."}}
+            ]
+        }
+        """
+        formatted = []
+        for msg in messages:
+            formatted_msg = {"role": msg["role"]}
+            
+            if isinstance(msg["content"], list):
+                # Convert content items to Road2all format
+                content_list = []
+                for item in msg["content"]:
+                    if item.get("type") == "input_text":
+                        # Convert "input_text" to "text"
+                        content_list.append({
+                            "type": "text",
+                            "text": item["text"]
+                        })
+                    elif item.get("type") == "input_image":
+                        # Convert "input_image" to "image_url" with nested structure
+                        content_list.append({
+                            "type": "image_url",
+                            "image_url": {"url": item["image_url"]}
+                        })
+                    elif item.get("type") == "text":
+                        # Already in correct format
+                        content_list.append(item)
+                    elif item.get("type") == "image_url":
+                        # Already in correct format
+                        content_list.append(item)
+                    else:
+                        # Keep other types as-is (fallback)
+                        content_list.append(item)
+                
+                formatted_msg["content"] = content_list
+            else:
+                # Simple text message - keep as string
+                formatted_msg["content"] = msg["content"]
+            
+            formatted.append(formatted_msg)
+        
+        return formatted
+
+
 class BaseLLMClient:
     """Base class for LLM clients, defining unified interface"""
     
@@ -145,6 +302,16 @@ class BaseLLMClient:
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.usage_stats = UsageStats()
+        self.logger = None
+        # Set default formatter, will be overridden by subclasses
+        self.message_formatter = MessageFormatter()
+    
+    def format_messages(self, messages: List[Dict]) -> Any:
+        """
+        Format messages for this API
+        Uses the message_formatter to convert to API-specific format
+        """
+        return self.message_formatter.format_for_api(messages)
     
     def __call__(self, messages: list) -> str:
         """Send messages and return response"""
@@ -180,8 +347,8 @@ class OpenAIAPI(BaseLLMClient):
         self.usage_stats.prompt_tokens += response.usage.input_tokens
         self.usage_stats.completion_tokens += response.usage.output_tokens
         self.usage_stats.image_count += count_images_in_messages(messages)
-        
-        return response.output[0].content[0].text
+
+        return next(block.text for item in response.output if item.type=="message" for block in item.content if block.type=="output_text")
     
     def call_cua(
         self,
@@ -289,6 +456,7 @@ class Road2allAPI(BaseLLMClient):
     def __init__(self, model_name: str, temperature: float = 0, max_tokens: int = 1024):
         super().__init__(model_name, temperature, max_tokens)
         self.url = "https://api2.road2all.com/v1/chat/completions"
+        self.message_formatter = Road2allMessageFormatter()
     
     def __call__(self, messages: list) -> str:
         headers = {
@@ -296,11 +464,14 @@ class Road2allAPI(BaseLLMClient):
             "Content-Type": "application/json",
         }
         
+        # Format messages for Road2all API
+        formatted_messages = self.format_messages(messages)
+        
         data = {
             "model": self.model_name,
             "max_tokens": self.max_tokens,
             "temperature": self.temperature,
-            "messages": messages,
+            "messages": formatted_messages,
         }
         
         response = requests.post(self.url, headers=headers, json=data)
@@ -347,13 +518,17 @@ class OpenRouterAPI(BaseLLMClient):
             "Authorization": f"Bearer {OPENROUTER_API_KEY}",
             "Content-Type": "application/json",
         }
+        self.message_formatter = OpenRouterMessageFormatter()
     
     def __call__(self, messages: list) -> str:
+        # Format messages for OpenRouter API
+        formatted_messages = self.format_messages(messages)
+        
         data = json.dumps({
             "model": self.model_name,
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
-            "messages": messages,
+            "messages": formatted_messages,
         })
         
         response = requests.post(self.url, headers=self.headers, data=data)
@@ -397,9 +572,10 @@ class OpenRouterAPI(BaseLLMClient):
 class AbstractLLM:
     """
     LLM abstraction layer providing unified interface and retry mechanism
+    Automatically handles format adaptation for different API platforms
     """
     
-    def __init__(self, model_name: str, temperature: float = 0.1, max_tokens: int = 4096, logger: logging.Logger = logging.getLogger("default")):
+    def __init__(self, model_name: str, temperature: float = 0.1, max_tokens: int = 4096, logger: logging.Logger = None):
         """
         Initialize LLM instance
         
@@ -407,10 +583,12 @@ class AbstractLLM:
             model_name: Model name
             temperature: Sampling temperature
             max_tokens: Maximum number of tokens
+            logger: Logger instance
         """
-        if not logger.handlers:
+        if logger is None:
+            logger = logging.getLogger("default")
             handler = logging.StreamHandler(sys.stdout)
-            handler.setFormatter(logging.Formatter('%(levelname)s - %(message)s'))
+            handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
             logger.addHandler(handler)
             logger.setLevel(logging.DEBUG)
 
@@ -424,19 +602,19 @@ class AbstractLLM:
         # Get model configuration
         self.model_config = MODEL_CONFIGS[model_name]
         
-        # Create client instance
+        # Create client instance - each client has its own message formatter
         client_class = globals()[self.model_config.client_class]
         self.client = client_class(self.model_config.real_model_name, temperature, max_tokens)
-        self.is_vlm = self.model_config.is_vlm
         self.logger = logger
         self.client.logger = logger
     
-    def __call__(self, messages: list, max_retries: int = 3) -> Optional[str]:
+    def __call__(self, messages: list, max_retries: int = 1) -> Optional[str]:
         """
         Call LLM with timeout and retry mechanism
+        Messages are automatically formatted for the specific API platform
         
         Args:
-            messages: List of messages
+            messages: List of messages in normalized format (OpenAI style)
             max_retries: Maximum number of retries
         
         Returns:
@@ -446,6 +624,7 @@ class AbstractLLM:
             try:
                 @with_timeout(self.timeout_seconds)
                 def call_llm():
+                    # The client will automatically format messages using its formatter
                     return self.client(messages)
                 
                 response = call_llm()
@@ -460,6 +639,7 @@ class AbstractLLM:
             
             except Exception as e:
                 self.logger.error(f"Attempt {attempt + 1}/{max_retries}: LLM call failed with error: {e}")
+                
                 if attempt < max_retries - 1:
                     wait_time = (attempt + 1) * 5
                     self.logger.error(f"Waiting {wait_time} seconds before retry...")
@@ -469,7 +649,10 @@ class AbstractLLM:
         return None
     
     def call_cua(self, messages: list, **kwargs) -> Tuple[str, str]:
-        """Call Computer Use API"""
+        """
+        Call Computer Use API
+        Messages are automatically formatted for the specific API
+        """
         return self.client.call_cua(messages, **kwargs)
     
     def get_usage(self) -> Tuple[float, int, int, int]:
@@ -489,13 +672,16 @@ class AbstractLLM:
 
 
 if __name__ == "__main__":
-    # Test basic call
-    llm = AbstractLLM("qwen3")
+    # Test basic call with automatic format adaptation
+    llm = AbstractLLM("o4-mini")
+    
+    # Example with text only - using OpenAI style (normalized format)
     messages = [
         {
             "role": "user",
             "content": [
-                {"type": "text", "text": "hi"},
+                {"type": "input_text", "text": "What's in this image?"},
+                {"type": "input_image", "image_url": encode_image(Image.open("data/test.jpg"))}
             ],
         }
     ]
@@ -505,8 +691,43 @@ if __name__ == "__main__":
     
     # Get cost information
     cost, prompt_tokens, completion_tokens, image_count = llm.get_usage()
-    llm.logger.info(f"\nUsage Statistics:")
+    llm.logger.info(f"Usage Statistics:")
     llm.logger.info(f"Cost: ${cost:.6f}")
     llm.logger.info(f"Prompt tokens: {prompt_tokens}")
     llm.logger.info(f"Completion tokens: {completion_tokens}")
     llm.logger.info(f"Images: {image_count}")
+
+    # client = AbstractLLM("computer-use-preview")
+    # messages = [
+    #     {
+    #         "role": "user",
+    #         "content": [
+    #             {"type": "input_text", "text": "click the chrome"},
+    #             {"type": "input_image", "image_url": encode_image(Image.open("data/screenshot.png"))}
+    #         ],
+    #     }
+    # ]
+    # py_cmd, reasoning = client.call_cua(messages, screen_width=1920, screen_height=1080, environment="linux")
+    # print(py_cmd, reasoning)
+    
+    # Test with vision model - using OpenAI style format (normalized)
+    # This format works for all APIs:
+    # - OpenAI: keeps the format as-is
+    # - OpenRouter/Road2all: automatically converts to their format
+    # 
+    # llm_vision = AbstractLLM("gpt-4o")
+    # messages_with_image = [
+    #     {
+    #         "role": "user",
+    #         "content": [
+    #             {"type": "input_text", "text": "What's in this image?"},
+    #             {"type": "input_image", "image_url": "https://example.com/image.jpg"}
+    #         ],
+    #     }
+    # ]
+    # # OpenAI models use this format directly
+    # response1 = llm_vision(messages_with_image)
+    # 
+    # # OpenRouter/Road2all models automatically convert to their format
+    # llm_claude = AbstractLLM("claude-4.5")
+    # response2 = llm_claude(messages_with_image)  # Auto-converts to OpenRouter format

@@ -14,7 +14,8 @@ import logging
 from multiprocessing import Pool, cpu_count
 from functools import partial
 import sys
-from utils import build_additional_contexts, summary, serialize_json, save_args_to_settings, get_price
+from utils import build_additional_contexts, summary, serialize_json, save_args_to_settings
+from llm import AbstractLLM
 
 
 TASK_DESCRIPTION = """# Your role
@@ -65,9 +66,9 @@ def config() -> argparse.Namespace:
 
     # agent config
     parser.add_argument("--oai_config_path", type=str, default="mm_agents/coact/OAI_CONFIG_LIST")
-    parser.add_argument("--orchestrator_model", type=str, default="o3-2025-04-16")
-    parser.add_argument("--coding_model", type=str, default="o4-mini-2025-04-16")
-    parser.add_argument("--summarizer_model", type=str, default="o4-mini-2025-04-16")
+    parser.add_argument("--orchestrator_model", type=str, default="o3")
+    parser.add_argument("--coding_model", type=str, default="o4-mini")
+    parser.add_argument("--summarizer_model", type=str, default="o4-mini")
     parser.add_argument("--cua_model", type=str, default="computer-use-preview")
     parser.add_argument("--orchestrator_max_steps", type=int, default=15) #15
     parser.add_argument("--coding_max_steps", type=int, default=20) #20
@@ -144,9 +145,9 @@ logger = logging.getLogger("desktopenv.expeiment")
 def process_task(task_info, 
                 path_to_vm,
                 snapshot_name="init_state",
-                orchestrator_model="o3-2025-04-16",
-                coding_model='o4-mini-2025-04-16',
-                summarizer_model='o4-mini-2025-04-16',
+                orchestrator_model="o3",
+                coding_model='o4-mini',
+                summarizer_model='o4-mini',
                 cua_model='computer-use-preview',
                 result_dir='results/coact',
                 orchestrator_max_steps=15,
@@ -257,23 +258,30 @@ def process_task(task_info,
                 coding_steps += hist.count('exitcode:')
         score = orchestrator_proxy.env.evaluate()
         
-        orchestrator_usage = orchestrator.get_total_usage().get(orchestrator_model, {})
-        orchestrator_prompt_tokens = orchestrator_usage.get('prompt_tokens', 0)
-        orchestrator_completion_tokens = orchestrator_usage.get('completion_tokens', 0)
-        prompt_price, completion_price = get_price(orchestrator_model)
-        orchestrator_cost = orchestrator_prompt_tokens * prompt_price + orchestrator_completion_tokens * completion_price
+        orchestrator_usage = orchestrator.get_total_usage().get(orchestrator_model)
+        orchestrator_prompt_tokens = orchestrator_usage.get('prompt_tokens')
+        orchestrator_completion_tokens = orchestrator_usage.get('completion_tokens')
+        
+        # Use AbstractLLM to calculate cost
+        orchestrator_llm = AbstractLLM(orchestrator_model, logger=logger)
+        orchestrator_llm.client.usage_stats.prompt_tokens = orchestrator_prompt_tokens
+        orchestrator_llm.client.usage_stats.completion_tokens = orchestrator_completion_tokens
+        orchestrator_llm.client.usage_stats.image_count = 1
+        orchestrator_cost, _, _, _ = orchestrator_llm.get_usage()
 
         model_usage = orchestrator_proxy.model_usage
         model_usage["orchestrator"] = {
             "cost": orchestrator_cost,
             "prompt_tokens": orchestrator_prompt_tokens,
-            "completion_tokens": orchestrator_completion_tokens
+            "completion_tokens": orchestrator_completion_tokens,
+            "image_count": 1
         }
         
         # Combine token usage from both agents
         prompt_tokens = sum(model_usage[model]["prompt_tokens"] for model in model_usage)
         completion_tokens = sum(model_usage[model]["completion_tokens"] for model in model_usage)
         total_cost = sum(model_usage[model]["cost"] for model in model_usage)
+        total_image_count = sum(model_usage[model]["image_count"] for model in model_usage)
         
         unified_log = {
             "statistics": {
@@ -281,6 +289,7 @@ def process_task(task_info,
                 "total_steps": cua_steps + coding_steps,
                 "cua_steps": cua_steps,
                 "coding_steps": coding_steps,
+                "image_count": total_image_count,
                 "total_cost": total_cost,
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,

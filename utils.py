@@ -7,14 +7,12 @@ import os
 from typing import Optional, Tuple
 import json
 import numpy as np
+from llm import MODEL_CONFIGS
 
 def get_price(model: str) -> Tuple[float, float]:
-    llm_configs = json.load(open("mm_agents/coact/OAI_CONFIG_LIST", "r"))
-    llm_config = next((config for config in llm_configs if config["model"] == model), None)
-    if not llm_config:
-        raise ValueError(f"Model {model} not found in OAI_CONFIG_LIST")
-    prompt_price, completion_price = llm_config["price"]
-    return prompt_price/1000000, completion_price/1000000
+    llm_config = MODEL_CONFIGS[model]
+    prompt_price, completion_price, image_price = llm_config.prompt_price, llm_config.completion_price, llm_config.image_price
+    return prompt_price/1000000, completion_price/1000000, image_price/1000
 
 def serialize_json(obj):
     """Convert objects to JSON serializable format"""
@@ -81,17 +79,20 @@ def build_additional_contexts(
     if use_rag:
         config_file_path = os.path.join(example_dir, f"{os.path.basename(example_dir)}.json")
         rag_context = get_retrieved_context(config_file_path, rag_topk, rag_filename)
-        rag_context = f"\n\nWe also retrieve relevant documentation from the web to help you with the task:\n{rag_context}"
+        if rag_context != '':
+            rag_context = f"\n\nWe also retrieve relevant documentation from the web to help you with the task:\n{rag_context}"
 
     if use_verbose_instruction:
         verbose_instruction_path = os.path.join(example_dir, 'verbose_instruction.txt')
         with open(verbose_instruction_path, 'r', encoding='utf-8', errors='ignore') as f:
             verbose_instruction = f.read().strip()
 
-        if 'abstract' in tags:
-            verbose_content = f"\n\nHere is an abstract instruction for completing the task:\n{verbose_instruction}"
-        else:
-            rag_context = ''
+        if verbose_instruction != '':
+            if 'abstract' in tags:
+                verbose_content = f"\n\nHere is an abstract instruction for completing the task:\n{verbose_instruction}"
+            else:
+                verbose_content = f"\n\nHere is a step-by-step tutorial from an expert instructing you how to complete it:\n{verbose_instruction}"
+                rag_context = ''
             
     return verbose_content + rag_context
 
@@ -110,6 +111,7 @@ def summary(args, test_all_meta):
     all_costs = []
     all_prompt_tokens = []
     all_completion_tokens = []
+    all_image_counts = []
     count_remain = 0
     scores = {}
     costs = {}
@@ -121,7 +123,7 @@ def summary(args, test_all_meta):
         scores[domain] = []
         costs[domain] = []
         operations_stats[domain] = {"gui_steps": [], "code_steps": [], "total_steps": []}
-        token_stats[domain] = {"prompt_tokens": [], "completion_tokens": []}
+        token_stats[domain] = {"prompt_tokens": [], "completion_tokens": [], "image_counts": []}
         
         for ex_id in test_all_meta[domain]:
             score_file = os.path.join(args.result_dir, f"{domain}/{ex_id}/result.txt")
@@ -140,6 +142,7 @@ def summary(args, test_all_meta):
                 code_steps = 0
                 prompt_tokens = 0
                 completion_tokens = 0
+                image_count = 0
                 model_usage = {}
                 
                 if os.path.exists(execution_log_file):
@@ -151,6 +154,7 @@ def summary(args, test_all_meta):
                             prompt_tokens = stats.get("prompt_tokens", 0)
                             completion_tokens = stats.get("completion_tokens", 0)
                             model_usage = stats.get("model_usage", {})
+                            image_count = stats.get("image_count", 0)
                             if 'cua_steps' in stats:
                                 gui_steps = stats.get("cua_steps")
                                 code_steps = stats.get("coding_steps")
@@ -164,12 +168,14 @@ def summary(args, test_all_meta):
                 costs[domain].append(cost)
                 all_prompt_tokens.append(prompt_tokens)
                 all_completion_tokens.append(completion_tokens)
+                all_image_counts.append(image_count)
                 operations_stats[domain]["gui_steps"].append(gui_steps)
                 operations_stats[domain]["code_steps"].append(code_steps)
                 operations_stats[domain]["total_steps"].append(gui_steps + code_steps)
                 token_stats[domain]["prompt_tokens"].append(prompt_tokens)
                 token_stats[domain]["completion_tokens"].append(completion_tokens)
-                
+                token_stats[domain]["image_counts"].append(image_count)
+
                 # Accumulate model usage
                 for model, usage in model_usage.items():
                     if model not in global_model_usage:
@@ -184,11 +190,13 @@ def summary(args, test_all_meta):
                 all_completion_tokens.append(0)
                 scores[domain].append(0.0)
                 costs[domain].append(0.0)
+                all_image_counts.append(0)
                 operations_stats[domain]["gui_steps"].append(0)
                 operations_stats[domain]["code_steps"].append(0)
                 operations_stats[domain]["total_steps"].append(0)
                 token_stats[domain]["prompt_tokens"].append(0)
                 token_stats[domain]["completion_tokens"].append(0)
+                token_stats[domain]["image_counts"].append(0)
                 count_remain += 1
     
     print('=== Overall Results ===')
@@ -210,7 +218,7 @@ def summary(args, test_all_meta):
     total_prompt_tokens = sum(all_prompt_tokens)
     total_completion_tokens = sum(all_completion_tokens)
     total_tokens = total_prompt_tokens + total_completion_tokens
-    
+    total_image_counts = sum(all_image_counts)
     tasks_processed = len(all_scores) - count_remain
     avg_cost = total_cost / tasks_processed if tasks_processed > 0 else 0
     avg_steps_per_task = total_steps / tasks_processed if tasks_processed > 0 else 0
@@ -219,7 +227,7 @@ def summary(args, test_all_meta):
     avg_prompt_tokens_per_task = total_prompt_tokens / tasks_processed if tasks_processed > 0 else 0
     avg_completion_tokens_per_task = total_completion_tokens / tasks_processed if tasks_processed > 0 else 0
     avg_total_tokens_per_task = total_tokens / tasks_processed if tasks_processed > 0 else 0
-    
+    avg_image_counts_per_task = total_image_counts / tasks_processed if tasks_processed > 0 else 0
     # Save detailed statistics as JSON
     detailed_stats = {
         "summary": {
@@ -231,15 +239,17 @@ def summary(args, test_all_meta):
             "total_tokens": total_tokens,
             "total_prompt_tokens": total_prompt_tokens,
             "total_completion_tokens": total_completion_tokens,
+            "total_image_counts": total_image_counts,
             "average_tokens_per_task": avg_total_tokens_per_task,
             "average_prompt_tokens_per_task": avg_prompt_tokens_per_task,
             "average_completion_tokens_per_task": avg_completion_tokens_per_task,
+            "average_image_counts_per_task": avg_image_counts_per_task,
             "total_steps": total_steps,
             "total_cua_steps": total_gui_steps,
             "total_code_steps": total_code_steps,
             "average_steps_per_task": avg_steps_per_task,
             "average_cua_steps_per_task": avg_gui_steps_per_task,
-            "average_code_steps_per_task": avg_code_steps_per_task
+            "average_code_steps_per_task": avg_code_steps_per_task,
         },
         "model_usage_breakdown": global_model_usage,
         "domain_breakdown": {
@@ -249,6 +259,7 @@ def summary(args, test_all_meta):
                 "average_total_tokens": np.mean(token_stats[domain]["prompt_tokens"]) + np.mean(token_stats[domain]["completion_tokens"]),
                 "average_prompt_tokens": np.mean(token_stats[domain]["prompt_tokens"]),
                 "average_completion_tokens": np.mean(token_stats[domain]["completion_tokens"]),
+                "average_image_counts": np.mean(token_stats[domain]["image_counts"]),
                 "average_steps": np.mean(operations_stats[domain]["total_steps"]),
                 "average_cua_steps": np.mean(operations_stats[domain]["gui_steps"]),
                 "average_code_steps": np.mean(operations_stats[domain]["code_steps"]),

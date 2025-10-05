@@ -5,10 +5,8 @@ import os
 import time
 from typing import Any, Dict, List, Tuple
 
-import openai
 from desktop_env.envs.desktop_env import DesktopEnv
-from openai import OpenAI  # pip install --upgrade openai>=1.66.2
-from utils import get_price
+from llm import AbstractLLM
 
 logger = logging.getLogger("desktopenv")
 
@@ -99,58 +97,6 @@ def _to_input_items(output_items: list) -> list:
     return cleaned  # keep just the most recent 50 items
 
 
-def call_openai_cua(client: OpenAI,
-                    history_inputs: list,
-                    screen_width: int = 1920,
-                    screen_height: int = 1080,
-                    environment: str = "linux",
-                    model: str = "computer-use-preview") -> Tuple[Any, float, int, int]:
-    retry = 0
-    response = None
-    
-    while retry < 1:
-        try:
-            response = client.responses.create(
-                model=model,
-                tools=[{
-                    "type": "computer_use_preview",
-                    "display_width": screen_width,
-                    "display_height": screen_height,
-                    "environment": environment,
-                }],
-                input=history_inputs,
-                reasoning={
-                    "summary": "concise"
-                },
-                tool_choice="required",
-                truncation="auto",
-            )
-            break
-        except openai.BadRequestError as e:
-            retry += 1
-            logger.error(f"Error in response.create: {e}")
-            time.sleep(0.5)
-        except openai.InternalServerError as e:
-            retry += 1
-            logger.error(f"Error in response.create: {e}")
-            time.sleep(0.5)
-    if retry == 3:
-        raise Exception("Failed to call OpenAI.")
-
-    cost = 0.0
-    input_tokens = 0
-    output_tokens = 0
-    prompt_price, completion_price = get_price(model)
-    if response and hasattr(response, "usage") and response.usage:
-        input_tokens = response.usage.input_tokens
-        output_tokens = response.usage.output_tokens
-        input_cost = input_tokens * prompt_price
-        output_cost = output_tokens * completion_price
-        cost = input_cost + output_cost
-
-    return response, cost, input_tokens, output_tokens
-
-
 def run_cua(
     env: DesktopEnv,
     instruction: str,
@@ -162,10 +108,11 @@ def run_cua(
     truncate_history_inputs: int = 100,
     client_password: str = "",
     model: str = "computer-use-preview",
-) -> Tuple[List, str, float, int, int]:
-    client = OpenAI()
+) -> Tuple[List, str, float, int, int, int]:
+    # Use AbstractLLM instead of direct OpenAI client
+    llm = AbstractLLM(model, temperature=0, max_tokens=4096, logger=logger)
 
-    # 0 / reset & first screenshot
+    # 0 / reset & first screenshot
     logger.info(f"Instruction: {instruction}")
     obs = env.controller.get_screenshot()
     screenshot_b64 = base64.b64encode(obs).decode("utf-8")
@@ -179,170 +126,84 @@ def run_cua(
         ],
     }]
 
-    response, cost, input_tokens, output_tokens = call_openai_cua(client, history_inputs, screen_width, screen_height, model=model)
-    total_cost = cost
-    total_input_tokens = input_tokens
-    total_output_tokens = output_tokens
     step_no = 0
-    
     reasoning_list = []
     reasoning = ""
+    llm.reset_stats()  # Reset stats at the beginning
 
-    # 1 / iterative dialogue
+    # 1 / iterative dialogue
     while step_no < max_steps:
         step_no += 1
-        history_inputs += _to_input_items(response.output)
-
-        # --- robustly pull out computer_call(s) ------------------------------
-        calls: List[Dict[str, Any]] = []
-        # completed = False
-        breakflag = False
-        for i, o in enumerate(response.output):
-            typ = o["type"] if isinstance(o, dict) else getattr(o, "type", None)
-            if not isinstance(typ, str):
-                typ = str(typ).split(".")[-1]
-            if typ == "computer_call":
-                calls.append(o if isinstance(o, dict) else o.model_dump())
-            elif typ == "reasoning" and len(o.summary) > 0:
-                reasoning = o.summary[0].text
-                reasoning_list.append(reasoning)
-                logger.info(f"[Reasoning]: {reasoning}")
-            elif typ == 'message':
-                if 'TERMINATE' in o.content[0].text:
-                    reasoning_list.append(f"Final output: {o.content[0].text}")
-                    reasoning = "My thinking process\n" + "\n- ".join(reasoning_list) + '\nPlease check the screenshot and see if it fulfills your requirements.'
-                    breakflag = True
-                    break
-                if 'IDK' in o.content[0].text:
-                    reasoning = f"{o.content[0].text}. I don't know how to complete the task. Please check the current screenshot."
-                    breakflag = True
-                    break
-                try:
-                    json.loads(o.content[0].text)
-                    history_inputs.pop(len(history_inputs) - len(response.output) + i)
-                    step_no -= 1
-                except Exception as e:
-                    logger.info(f"[Message]: {o.content[0].text}")
-                    if '?' in o.content[0].text:
-                        history_inputs += [{
-                            "role": "user",
-                            "content": [
-                                {"type": "input_text", "text": DEFAULT_REPLY},
-                            ],
-                        }]
-                    elif "{" in o.content[0].text and "}" in o.content[0].text:
-                        history_inputs.pop(len(history_inputs) - len(response.output) + i)
-                        step_no -= 1
-                    else:
-                        logger.info(f"[Message]: {o.content[0].text}")
-                        history_inputs.pop(len(history_inputs) - len(response.output) + i)
-                        reasoning = o.content[0].text
-                        reasoning_list.append(reasoning)
-                        step_no -= 1
-
-        if breakflag:
-            break
-
-        for action_call in calls:
-            py_cmd = _cua_to_pyautogui(action_call["action"])
-
-            # --- execute in VM ---------------------------------------------------
-            obs, *_ = env.step(py_cmd, sleep_after_execution)
-
-            # --- send screenshot back -------------------------------------------
-            screenshot_b64 = base64.b64encode(obs["screenshot"]).decode("utf-8")
-            with open(os.path.join(save_path, f"step_{step_no}.png"), "wb") as f:
-                f.write(obs["screenshot"])
-            history_inputs += [{
-                "type": "computer_call_output",
-                "call_id": action_call["call_id"],
-                "output": {
-                    "type": "computer_screenshot",
-                    "image_url": f"data:image/png;base64,{screenshot_b64}",
-                },
-            }]
-            if "pending_safety_checks" in action_call and len(action_call.get("pending_safety_checks", [])) > 0:
-                history_inputs[-1]['acknowledged_safety_checks'] = [
-                    {
-                        "id": psc["id"],
-                        "code": psc["code"],
-                        "message": "Please acknowledge this warning if you'd like to proceed."
-                    }
-                    for psc in action_call.get("pending_safety_checks", [])
-                ]
         
-        # truncate history inputs while preserving call_id pairs
-        if len(history_inputs) > truncate_history_inputs:
-            original_history = history_inputs[:]
-            history_inputs = [history_inputs[0]] + history_inputs[-truncate_history_inputs:]
-            
-            # Find all call_ids in the truncated history
-            call_ids_in_truncated = set()
-            for item in history_inputs:
-                if isinstance(item, dict) and 'call_id' in item:
-                    call_ids_in_truncated.add(item['call_id'])
-            
-            # Check if any call_ids are missing their pairs
-            call_id_types = {}  # call_id -> list of types that reference it
-            for item in history_inputs:
-                if isinstance(item, dict) and 'call_id' in item:
-                    call_id = item['call_id']
-                    item_type = item.get('type', '')
-                    if call_id not in call_id_types:
-                        call_id_types[call_id] = []
-                    call_id_types[call_id].append(item_type)
-            
-            # Find unpaired call_ids (should have both computer_call and computer_call_output)
-            unpaired_call_ids = []
-            for call_id, types in call_id_types.items():
-                # Check if we have both call and output
-                has_call = 'computer_call' in types
-                has_output = 'computer_call_output' in types
-                if not (has_call and has_output):
-                    unpaired_call_ids.append(call_id)
-            
-            # Add missing pairs from original history while preserving order
-            if unpaired_call_ids:
-                # Find missing paired items in their original order
-                missing_items = []
-                for item in original_history:
-                    if (isinstance(item, dict) and 
-                        item.get('call_id') in unpaired_call_ids and 
-                        item not in history_inputs):
-                        missing_items.append(item)
-                
-                # Insert missing items back, preserving their original order
-                # We need to find appropriate insertion points to maintain chronology
-                for missing_item in missing_items:
-                    # Find the best insertion point based on original history order
-                    original_index = original_history.index(missing_item)
-                    
-                    # Find insertion point in truncated history
-                    insert_pos = len(history_inputs)  # default to end
-                    for i, existing_item in enumerate(history_inputs[1:], 1):  # skip first item (initial prompt)
-                        if existing_item in original_history:
-                            existing_original_index = original_history.index(existing_item)
-                            if existing_original_index > original_index:
-                                insert_pos = i
-                                break
-                    
-                    history_inputs.insert(insert_pos, missing_item)
+        # Call CUA through AbstractLLM
+        py_cmd, step_reasoning = llm.call_cua(
+            messages=history_inputs,
+            screen_width=screen_width,
+            screen_height=screen_height,
+            environment="linux"
+        )
+        
+        if step_reasoning:
+            reasoning_list.append(step_reasoning)
+            logger.info(f"[Reasoning]: {step_reasoning}")
+        
+        # Check termination conditions
+        if "TERMINATE" in py_cmd or "TERMINATE" in step_reasoning:
+            reasoning = "My thinking process\n" + "\n- ".join(reasoning_list) + '\nPlease check the screenshot and see if it fulfills your requirements.'
+            break
+        
+        if "IDK" in py_cmd or "IDK" in step_reasoning:
+            reasoning = f"I don't know how to complete the task. Please check the current screenshot."
+            break
+        
+        if py_cmd == "WAIT":
+            logger.info("Waiting for next step")
+            continue
+        
+        # Execute action
+        logger.info(f"Executing: {py_cmd}")
+        obs, *_ = env.step(py_cmd, sleep_after_execution)
 
-        response, cost, input_tokens, output_tokens = call_openai_cua(client, history_inputs, screen_width, screen_height, model=model)
-        total_cost += cost
-        total_input_tokens += input_tokens
-        total_output_tokens += output_tokens
+        # Save screenshot
+        screenshot_b64 = base64.b64encode(obs["screenshot"]).decode("utf-8")
+        with open(os.path.join(save_path, f"step_{step_no}.png"), "wb") as f:
+            f.write(obs["screenshot"])
+        
+        # Add screenshot to history for next iteration
+        history_inputs.append({
+            "role": "assistant",
+            "content": [
+                {"type": "input_text", "text": f"Executed: {py_cmd}"}
+            ]
+        })
+        history_inputs.append({
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": DEFAULT_REPLY},
+                {"type": "input_image", "image_url": f"data:image/png;base64,{screenshot_b64}"}
+            ]
+        })
+        
+        # Truncate history if needed (keep first message + recent messages)
+        if len(history_inputs) > truncate_history_inputs:
+            history_inputs = [history_inputs[0]] + history_inputs[-truncate_history_inputs:]
     
-    # 更新：发送Esc键到虚拟机关闭临时窗口
     logger.info("Task completed, press Esc to close the temporary window")
     esc_cmd = "pyautogui.press('esc')"
     obs, *_ = env.step(esc_cmd, sleep_after_execution)
 
+    # Get cost and usage statistics from AbstractLLM
+    total_cost, total_input_tokens, total_output_tokens, total_image_count = llm.get_usage()
+    
     logger.info(f"Total cost for the task: ${total_cost:.4f}")
     logger.info(f"Total tokens: {total_input_tokens + total_output_tokens} (input: {total_input_tokens}, output: {total_output_tokens})")
-    history_inputs[0]['content'][1]['image_url'] = "<image>"
+    logger.info(f"Total images sent: {total_image_count}")
+    
+    # Clean image URLs in history for serialization
     for item in history_inputs:
-        if item.get('type', None) == 'computer_call_output':
-            item['output']['image_url'] = "<image>"
-    return history_inputs, reasoning, total_cost, total_input_tokens, total_output_tokens
-
+        if isinstance(item.get('content'), list):
+            for content_item in item['content']:
+                if content_item.get('type') == 'input_image':
+                    content_item['image_url'] = "<image>"
+    
+    return history_inputs, reasoning, total_cost, total_input_tokens, total_output_tokens, total_image_count

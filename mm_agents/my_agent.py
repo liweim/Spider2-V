@@ -242,7 +242,7 @@ class MyAgentFramework:
     
     def __init__(
         self,
-        coordinator_model: str = "o3-2025-04-16",
+        coordinator_model: str = "o3",
         operator_client_password: str = "",
         operator_model: str = "computer-use-preview",
         screen_width: int = 1920,

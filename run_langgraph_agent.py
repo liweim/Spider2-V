@@ -131,7 +131,7 @@ def main():
     parser.add_argument("--headless", action="store_true", help="Run in headless mode")
 
     # Agent config
-    parser.add_argument("--coordinator_model", type=str, default="o3-2025-04-16",
+    parser.add_argument("--coordinator_model", type=str, default="o3",
                        help="Model for Coordinator agent")
     parser.add_argument("--operator_model", type=str, default="computer-use-preview",
                        help="Model for Operator agent")

@@ -28,6 +28,7 @@ You are a task solver completing computer tasks step-by-step.
 2. Check screenshots carefully to verify task completion
 3. Prefer code execution for file operations and data processing
 4. Do not modify user requirements (file names, paths, etc.)
+5. **CRITICAL: When delegating to GUI operator, give ONLY ONE atomic action at a time**
 
 # Available Tools
 ## Code Execution (Bash)
@@ -37,7 +38,17 @@ Execute bash commands in ```bash...``` blocks.
 - Verify results before saving changes
 
 ## GUI Operator
-Delegate GUI tasks to an operator (one action per call: one click, one type, etc.).
+Delegate GUI tasks to an operator.
+**IMPORTANT: Issue ONE action per call - one click, one type, one keypress, etc.**
+- Good examples:
+  * "Press Enter to confirm the text"
+  * "Click the Merge Cells button in the toolbar"
+  * "Type 'High Interest Rate' in the selected cell"
+  * "Select cells A2:B2 by typing A2:B2 in the Name box and pressing Enter"
+- Bad examples (TOO MANY STEPS):
+  * "Press Enter, then click A2:B2, then click Merge, then type text" ✗
+  * "1. Do X 2. Do Y 3. Do Z" ✗
+
 - Operator can click and type but positioning may be inaccurate
 - If file modified by code, GUI must close and reopen file to see changes
 - If an operator action produces wrong results, issue Ctrl+Z command to revert before trying alternative approach
@@ -63,9 +74,11 @@ When GUI operations fail (check screenshot for expected result):
 {
     "thought": "Your reasoning about current situation and next action",
     "action": "code|gui|terminate",
-    "content": "Bash commands OR GUI task description (can include Ctrl+Z command)",
+    "content": "Bash commands OR ONE atomic GUI task description",
     "gui_feedback": "Optional: high-level guidance if previous GUI failed (no coordinates)"
 }
+
+**Remember: For GUI actions, 'content' should describe ONLY ONE operation. Break complex tasks into multiple coordinator turns.**
 
 Use "terminate" action with "INFEASIBLE: [reason]" if task impossible."""
 
@@ -116,12 +129,14 @@ class AgentState(TypedDict):
     last_execution_result: str
     last_execution_success: bool
     
-    # History and logs
-    action_logs: Annotated[List[dict], op.add]
-    conversation_history: Annotated[List[dict], op.add]
+    # History and logs - remove op.add, use regular fields
+    action_logs: List[dict]
+    conversation_history: List[dict]
     
     # Tracking
-    model_usage: dict
+    last_history_summary_at: int
+    history_summary: str
+    history_summary_interval: int
     
     # Control flow
     next_node: str
@@ -140,9 +155,161 @@ class AgentState(TypedDict):
     screen_height: int
     sleep_after_execution: float
     max_steps: int
+    
+    # LLM clients (removed model_usage)
+    coordinator_llm: AbstractLLM
+    operator_llm: AbstractLLM
 
 
 # ==================== NODE FUNCTIONS ====================
+def print_messages(messages: List[dict], logger: logging.Logger):
+    # Debug print messages without base64 images
+    logger.info("="*80)
+    logger.info("[Messages]")
+    debug_text = []
+    for i, msg in enumerate(messages):
+        debug_text.append(f"\n[Message {i}] Role: {msg['role']}")
+        if isinstance(msg['content'], str):
+            debug_text.append(f"Content: {msg['content'][:500]}")
+        elif isinstance(msg['content'], list):
+            for item in msg['content']:
+                if item['type'] == 'input_text':
+                    debug_text.append(f"Text: {item['text'][:500]}")
+                elif item['type'] == 'input_image':
+                    debug_text.append(f"Image: [base64 data omitted]")
+    logger.info("\n".join(debug_text))
+    logger.info("="*80)
+
+
+def build_coordinator_messages(state: AgentState, logger) -> Tuple[List[dict], dict]:
+    """
+    Build message list for coordinator with efficient history management.
+    Strategy: Keep first message (task instruction) + summary of middle turns + recent turns
+    
+    Returns:
+        Tuple of (messages, state_updates) - returns message list and state updates
+    """
+    history = state.get("conversation_history", [])
+    messages = [{"role": "system", "content": COORDINATOR_SYSTEM_MESSAGE}]
+    
+    summary_interval = state.get("history_summary_interval", 5)
+    state_updates = {
+        "conversation_history": history,
+        "history_summary": state.get("history_summary", ""),
+        "last_history_summary_at": state.get("last_history_summary_at", 0),
+    }
+    
+    # If history is short (less than interval + 2 recent turns), keep everything
+    # Calculation: 1 (first message) + summary_interval * 2 (turns as message pairs) + 4 (last 2 turns)
+    min_messages_for_summary = 1 + summary_interval * 2 + 4
+    
+    if len(history) < min_messages_for_summary:
+        messages.extend(history)
+        return messages, state_updates
+    
+    # Check if we need to create/update summary
+    last_summary_at = state.get("last_history_summary_at", 0)
+    current_turn = (len(history) - 1) // 2  # Subtract first message, then divide by 2
+    
+    # Summarize based on configured interval
+    if current_turn - last_summary_at >= summary_interval:
+        # Messages to summarize: everything except first message and last 2 turns
+        summary_start = 1  # After first message (task instruction)
+        summary_end = len(history) - 4  # Before last 2 turns
+        to_summarize = history[summary_start:summary_end]
+        
+        if to_summarize:
+            logger.info(f"Summarizing {len(to_summarize)} messages (from message {summary_start} to {summary_end-1})...")
+            logger.info(f"Summary triggered: current_turn={current_turn}, last_summary_at={last_summary_at}, interval={summary_interval}")
+            
+            # Build summary request messages
+            summary_messages = [
+                {
+                    "role": "system",
+                    "content": "You create concise summaries of agent conversation history."
+                },
+                {
+                    "role": "user",
+                    "content": f"""Summarize this conversation history between a coordinator and execution results.
+
+Focus on:
+1. Actions attempted (bash commands, GUI operations)
+2. Success/failure patterns
+3. Important discoveries or issues
+4. Progress toward task goal
+
+Keep it concise (max 200 words) but include critical information.
+
+History to summarize:
+{format_history_for_summary(to_summarize)}"""
+                }
+            ]
+            
+            # Use coordinator LLM from state for summarization
+            summary = state["coordinator_llm"](summary_messages)
+            
+            # Create summary messages to replace the middle section
+            summary_messages_pair = [
+                {
+                    "role": "user",
+                    "content": f"[Summary of {len(to_summarize)//2} previous operations]\n{summary}"
+                },
+                {
+                    "role": "assistant",
+                    "content": "Understood. Continuing from this context."
+                }
+            ]
+            
+            # REPLACE the middle section in conversation_history
+            # New history = first message + summary + last 2 turns
+            compressed_history = (
+                history[:1] +  # First message (task instruction)
+                summary_messages_pair +  # Summary replacement
+                history[-4:]  # Last 2 turns
+            )
+            
+            logger.info(f"Created summary at turn {current_turn} ({len(summary)} chars)")
+            logger.info(f"Summarized {len(to_summarize)} messages ({len(to_summarize)//2} turns)")
+            logger.info(f"History compressed: {len(history)} -> {len(compressed_history)} messages")
+            
+            # Update state
+            state_updates["conversation_history"] = compressed_history
+            state_updates["history_summary"] = summary
+            state_updates["last_history_summary_at"] = current_turn
+            
+            # Build messages from compressed history
+            messages.extend(compressed_history)
+            logger.info(f"Built messages: {len(messages)} total (including system prompt)")
+            
+            return messages, state_updates
+                
+    # Build messages from original history (no compression needed)
+    messages.extend(history)
+    logger.info(f"Built messages: {len(messages)} total (including system prompt)")
+    
+    return messages, state_updates
+
+
+def format_history_for_summary(messages: List[dict]) -> str:
+    """Format message history into readable text for summarization."""
+    formatted = []
+    for msg in messages:
+        role = msg["role"].upper()
+        content = msg["content"]
+        
+        if isinstance(content, str):
+            formatted.append(f"{role}: {content[:500]}")
+        elif isinstance(content, list):
+            text_parts = [
+                item.get("text", "")
+                for item in content
+                if item.get("type") == "input_text"
+            ]
+            if text_parts:
+                formatted.append(f"{role}: {' '.join(text_parts)[:500]}")
+    
+    return "\n\n".join(formatted)
+
 
 def coordinator_node(state: AgentState) -> dict:
     """Coordinator makes decisions about next action."""
@@ -151,9 +318,10 @@ def coordinator_node(state: AgentState) -> dict:
     screenshot = state["current_screenshot"]
     screenshot_b64 = base64.b64encode(screenshot).decode("utf-8")
 
-    client = AbstractLLM(state.get("coordinator_model"), logger=logger)
+    # Get coordinator LLM from state
+    coordinator_llm = state["coordinator_llm"]
     
-    # Prepare prompt
+    # Prepare current message
     if state["operation_count"] == 0:
         user_message = f"""{state['task_instruction']}{state['additional_context']}
 
@@ -166,53 +334,34 @@ Current screenshot attached below."""
 
 Continue with the task or verify if completed. Current screenshot attached below."""
     
-    # Build messages with history
-    messages = [{"role": "system", "content": COORDINATOR_SYSTEM_MESSAGE}]
-    
-    # Add recent conversation history (last 6 messages = 3 turns)
-    history = state.get("conversation_history", [])
-    if len(history) > 6:
-        messages.extend(history[-6:])
-    else:
-        messages.extend(history)
+    # Build messages with efficient history management
+    messages, state_updates = build_coordinator_messages(state, logger)
     
     # Add current message
-    if client.is_vlm:
-        messages.append({
-            "role": "user",
-            "content": [
-                {"type": "text", "text": user_message},
-                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{screenshot_b64}"}}
-            ]
-        })
-    else:
-        messages.append({
-            "role": "user",
-            "content": [
-                {"type": "text", "text": user_message},
-            ]
-        })
+    messages.append({
+        "role": "user",
+        "content": [
+            {"type": "input_text", "text": user_message},
+            {"type": "input_image", "image_url": f"data:image/png;base64,{screenshot_b64}"}
+        ]
+    })
     
     logger.info(f"\n{'='*80}")
     logger.info(f"[Coordinator] Operation count: {state['operation_count']}")
+    logger.info(f"[Coordinator] Message count: {len(messages)}")
     
     try:
-        response_text = client(messages)
-        cost, prompt_tokens, completion_tokens, image_count = client.get_usage()
-        
-        # Update model usage
-        model_usage = state.get("model_usage", {}).copy()
-        if "coordinator" not in model_usage:
-            model_usage["coordinator"] = {"cost": 0.0, "prompt_tokens": 0, "completion_tokens": 0, "image_count": 0}
-        model_usage["coordinator"]["cost"] += cost
-        model_usage["coordinator"]["prompt_tokens"] += prompt_tokens
-        model_usage["coordinator"]["completion_tokens"] += completion_tokens
-        model_usage["coordinator"]["image_count"] += image_count
+        response_text = coordinator_llm(messages)
         
         # Parse JSON response or handle direct bash execution
         try:
+            if "```json" in response_text:
+                json_start = response_text.find("```json") + 7
+                json_end = response_text.find("```", json_start)
+                response_text = response_text[json_start:json_end].strip()
+                decision = json.loads(repair_json(response_text))
             # Check if response contains bash code block - execute directly
-            if "```bash" in response_text:
+            elif "```bash" in response_text:
                 logger.info("Detected bash code block, executing directly")
                 code_start = response_text.find("```bash") + 7
                 code_end = response_text.find("```", code_start)
@@ -252,7 +401,6 @@ Continue with the task or verify if completed. Current screenshot attached below
                     "code": bash_code,
                     "exitcode": exitcode,
                     "output": logs,
-                    "cost": 0.0,
                     "screenshot": screenshot_filename
                 }
                 
@@ -260,11 +408,16 @@ Continue with the task or verify if completed. Current screenshot attached below
                 logger.info(f"Exit code: {exitcode}")
                 logger.info(f"Output: {logs[:500]}")
                 
-                # Add to conversation history
-                conversation_history = [
+                # Explicitly manage conversation history: use compressed history, add new messages
+                compressed_history = state_updates.get("conversation_history", state.get("conversation_history", []))
+                new_history = compressed_history + [
                     {"role": "user", "content": user_message},
                     {"role": "assistant", "content": response_text}
                 ]
+                
+                # Explicitly manage action logs: read existing logs, add new log
+                current_action_logs = state.get("action_logs", [])
+                new_action_logs = current_action_logs + [action_log]
                 
                 # Return state update to continue workflow
                 return {
@@ -272,21 +425,17 @@ Continue with the task or verify if completed. Current screenshot attached below
                     "current_screenshot": screenshot,
                     "last_execution_result": result_message,
                     "last_execution_success": success,
-                    "conversation_history": conversation_history,
-                    "action_logs": [action_log],
-                    "model_usage": model_usage,
+                    "conversation_history": new_history,  # complete replacement
+                    "action_logs": new_action_logs,  # complete replacement
+                    "history_summary": state_updates.get("history_summary", ""),
+                    "last_history_summary_at": state_updates.get("last_history_summary_at", 0),
                     "next_node": "coordinator",
                     "task_completed": False,
-                    "task_infeasible": False
+                    "task_infeasible": False,
                 }
             
-            # Extract JSON content if present
-            if "```json" in response_text:
-                json_start = response_text.find("```json") + 7
-                json_end = response_text.find("```", json_start)
-                response_text = response_text[json_start:json_end].strip()
-            
-            decision = json.loads(repair_json(response_text))
+            else:
+                decision = json.loads(repair_json(response_text))
         except json.JSONDecodeError:
             # If JSON parsing fails, try to infer intent from response
             logger.error(f"Failed to parse JSON from response: {response_text}")
@@ -307,8 +456,9 @@ Continue with the task or verify if completed. Current screenshot attached below
         if gui_success is False:
             logger.info(f"GUI Result Check: {gui_result_check[:150]}")
         
-        # Add to conversation history
-        conversation_history = [
+        # Explicitly manage conversation history: use compressed history, add new messages
+        compressed_history = state_updates.get("conversation_history", state.get("conversation_history", []))
+        new_history = compressed_history + [
             {"role": "user", "content": user_message},
             {"role": "assistant", "content": response_text}
         ]
@@ -316,15 +466,21 @@ Continue with the task or verify if completed. Current screenshot attached below
         # Determine next node
         action = decision.get("action", "terminate").lower()
         
+        # Base return dict with explicit history management
+        base_return = {
+            "coordinator_thought": decision.get("thought", ""),
+            "coordinator_action": action,
+            "coordinator_content": decision.get("content", ""),
+            "conversation_history": new_history,  # complete replacement
+            "history_summary": state_updates.get("history_summary", ""),
+            "last_history_summary_at": state_updates.get("last_history_summary_at", 0),
+        }
+        
         if action == "terminate":
             task_infeasible = "infeasible" in decision.get("thought", "").lower()
             logger.info(f"Task {'INFEASIBLE' if task_infeasible else 'COMPLETED'}")
             return {
-                "coordinator_thought": decision.get("thought", ""),
-                "coordinator_action": action,
-                "coordinator_content": decision.get("content", ""),
-                "conversation_history": conversation_history,
-                "model_usage": model_usage,
+                **base_return,
                 "next_node": "evaluator",
                 "task_completed": True,
                 "task_infeasible": task_infeasible
@@ -332,11 +488,7 @@ Continue with the task or verify if completed. Current screenshot attached below
         elif action == "code":
             logger.info("Next: Code Execution (Bash)")
             return {
-                "coordinator_thought": decision.get("thought", ""),
-                "coordinator_action": action,
-                "coordinator_content": decision.get("content", ""),
-                "conversation_history": conversation_history,
-                "model_usage": model_usage,
+                **base_return,
                 "next_node": "code_executor",
                 "task_completed": False,
                 "task_infeasible": False
@@ -344,13 +496,9 @@ Continue with the task or verify if completed. Current screenshot attached below
         elif action == "gui":
             logger.info("Next: GUI Operation")
             return {
-                "coordinator_thought": decision.get("thought", ""),
-                "coordinator_action": action,
-                "coordinator_content": decision.get("content", ""),
+                **base_return,
                 "last_gui_success": gui_success,
                 "last_gui_result_check": gui_result_check,
-                "conversation_history": conversation_history,
-                "model_usage": model_usage,
                 "next_node": "gui_operator",
                 "task_completed": False,
                 "task_infeasible": False
@@ -358,11 +506,7 @@ Continue with the task or verify if completed. Current screenshot attached below
         else:
             logger.warning(f"Unknown action: {action}, terminating")
             return {
-                "coordinator_thought": decision.get("thought", ""),
-                "coordinator_action": "terminate",
-                "coordinator_content": "",
-                "conversation_history": conversation_history,
-                "model_usage": model_usage,
+                **base_return,
                 "next_node": "evaluator",
                 "task_completed": True,
                 "task_infeasible": False
@@ -371,13 +515,24 @@ Continue with the task or verify if completed. Current screenshot attached below
     except Exception as e:
         logger.error(f"Coordinator error: {e}")
         logger.error(traceback.format_exc())
+        
+        # Explicitly manage conversation history: use compressed history, add error message
+        compressed_history = state_updates.get("conversation_history", state.get("conversation_history", []))
+        new_history = compressed_history + [
+            {"role": "user", "content": user_message},
+            {"role": "assistant", "content": f"Error: {str(e)}"}
+        ]
+        
         return {
             "coordinator_thought": f"Error: {str(e)}",
             "coordinator_action": "terminate",
             "coordinator_content": "",
+            "conversation_history": new_history,  # complete replacement
+            "history_summary": state_updates.get("history_summary", ""),
+            "last_history_summary_at": state_updates.get("last_history_summary_at", 0),
             "next_node": "evaluator",
             "task_completed": True,
-            "task_infeasible": True
+            "task_infeasible": True,
         }
 
 
@@ -430,12 +585,16 @@ def code_executor_node(state: AgentState) -> dict:
     logger.info(f"Exit code: {exitcode}")
     logger.info(f"Output: {logs[:500]}")
     
+    # Explicitly manage action logs: read existing logs, add new log
+    current_action_logs = state.get("action_logs", [])
+    new_action_logs = current_action_logs + [action_log]
+    
     return {
         "operation_count": operation_count,
         "current_screenshot": screenshot,
         "last_execution_result": result_message,
         "last_execution_success": success,
-        "action_logs": [action_log],
+        "action_logs": new_action_logs,  # complete replacement
         "next_node": "coordinator"
     }
 
@@ -447,7 +606,9 @@ def gui_operator_node(state: AgentState) -> dict:
     task = state["coordinator_content"]
     env = state["env"]
     operation_count = state["operation_count"] + 1
-    operator_model = state.get("operator_model", "computer-use-preview")
+    
+    # Get operator LLM from state
+    operator_llm = state["operator_llm"]
     
     # Check if this is a retry with failure info
     last_gui_success = state.get("last_gui_success")
@@ -492,21 +653,19 @@ Please re-analyze the current screenshot carefully and adjust your coordinates/a
     history_inputs = [{
         "role": "system",
         "content": [
-            {"type": "text", "text": system_prompt},
+            {"type": "input_text", "text": system_prompt},
         ],
     },
     {
         "role": "user",
         "content": [
-            {"type": "text", "text": f"Task: {task}"},
-            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{screenshot_b64}"}},
+            {"type": "input_text", "text": f"Task: {task}"},
+            {"type": "input_image", "image_url": f"data:image/png;base64,{screenshot_b64}"},
         ],
     }]
     
     try:
-        client = AbstractLLM(operator_model, logger=logger)
-        py_cmd, reasoning = client.call_cua(history_inputs, screen_width=state.get("screen_width", 1920), screen_height=state.get("screen_height", 1080), environment="linux")
-        cost, input_tokens, output_tokens, image_count = client.get_usage()
+        py_cmd, reasoning = operator_llm.call_cua(history_inputs, screen_width=state.get("screen_width", 1920), screen_height=state.get("screen_height", 1080), environment="linux")
 
         executed_action = False
         execution_error = None
@@ -523,15 +682,6 @@ Please re-analyze the current screenshot carefully and adjust your coordinates/a
         if not reasoning:
             reasoning = "Executed GUI action" if executed_action else "No action executed"
 
-        # Update model usage
-        model_usage = state.get("model_usage", {}).copy()
-        if "operator" not in model_usage:
-            model_usage["operator"] = {"cost": 0.0, "prompt_tokens": 0, "completion_tokens": 0, "image_count": 0}
-        model_usage["operator"]["cost"] += cost
-        model_usage["operator"]["prompt_tokens"] += input_tokens
-        model_usage["operator"]["completion_tokens"] += output_tokens
-        model_usage["operator"]["image_count"] += image_count
-
         # Get updated screenshot
         screenshot = env.controller.get_screenshot()
         
@@ -543,17 +693,20 @@ Please re-analyze the current screenshot carefully and adjust your coordinates/a
             "result": reasoning,
             "execution_success": executed_action,
             "had_previous_failure": last_gui_success is False,
-            "cost": cost,
             "model": state.get("operator_model", "computer-use-preview"),
             "screenshot": screenshot_filename
         }
         
-        result_message = f"GUI operation executed: {reasoning}\nCommand: {py_cmd if py_cmd else 'None'}\n\nCoordinator: Please check the screenshot to verify if the intended action succeeded."
+        result_message = f"GUI operation executed: {reasoning}\nCommand: {py_cmd if py_cmd else 'None'}"
         
         if not executed_action and execution_error:
             result_message += f"\n\nExecution error occurred: {execution_error}"
         
         logger.info(f"Execution status: {executed_action}")
+        
+        # Explicitly manage action logs: read existing logs, add new log
+        current_action_logs = state.get("action_logs", [])
+        new_action_logs = current_action_logs + [action_log]
         
         return {
             "operation_count": operation_count,
@@ -562,8 +715,7 @@ Please re-analyze the current screenshot carefully and adjust your coordinates/a
             "last_execution_success": executed_action,
             "last_gui_task": task,
             "last_gui_command": py_cmd if py_cmd else "None",
-            "action_logs": [action_log],
-            "model_usage": model_usage,
+            "action_logs": new_action_logs,  # complete replacement
             "next_node": "coordinator"
         }
         
@@ -583,13 +735,17 @@ Please re-analyze the current screenshot carefully and adjust your coordinates/a
             "screenshot": screenshot_filename
         }
         
+        # Explicitly manage action logs: read existing logs, add new log
+        current_action_logs = state.get("action_logs", [])
+        new_action_logs = current_action_logs + [action_log]
+        
         return {
             "operation_count": operation_count,
             "last_execution_result": f"GUI operation failed with exception: {str(e)}",
             "last_execution_success": False,
             "last_gui_task": task,
             "last_gui_command": "Error",
-            "action_logs": [action_log],
+            "action_logs": new_action_logs,  # complete replacement
             "next_node": "coordinator"
         }
 
@@ -615,10 +771,31 @@ def evaluator_node(state: AgentState) -> dict:
     gui_execution_failures = len([log for log in state["action_logs"] if log["type"] == "gui_operator" and not log.get("execution_success", True)])
     gui_retries = len([log for log in state["action_logs"] if log["type"] == "gui_operator" and log.get("had_previous_failure", False)])
     
-    model_usage = state.get("model_usage", {})
-    prompt_tokens = sum(model_usage[model]["prompt_tokens"] for model in model_usage)
-    completion_tokens = sum(model_usage[model]["completion_tokens"] for model in model_usage)
-    total_cost = sum(model_usage[model]["cost"] for model in model_usage)
+    # Get usage from LLM clients
+    coordinator_llm = state["coordinator_llm"]
+    operator_llm = state["operator_llm"]
+    
+    coordinator_cost, coordinator_prompt, coordinator_completion, coordinator_images = coordinator_llm.get_usage()
+    operator_cost, operator_prompt, operator_completion, operator_images = operator_llm.get_usage()
+    
+    total_cost = coordinator_cost + operator_cost
+    prompt_tokens = coordinator_prompt + operator_prompt
+    completion_tokens = coordinator_completion + operator_completion
+    
+    model_usage = {
+        "coordinator": {
+            "cost": coordinator_cost,
+            "prompt_tokens": coordinator_prompt,
+            "completion_tokens": coordinator_completion,
+            "image_count": coordinator_images
+        },
+        "operator": {
+            "cost": operator_cost,
+            "prompt_tokens": operator_prompt,
+            "completion_tokens": operator_completion,
+            "image_count": operator_images
+        }
+    }
     
     logger.info(f"Score: {score}")
     logger.info(f"Total operations: {state['operation_count']} (GUI: {cua_steps}, Bash: {coding_steps})")
@@ -740,23 +917,9 @@ class MyAgentFramework:
         llm_config_path: str = None,
         max_steps: int = 15,
         history_save_dir: str = "",
-        max_gui_subtask_attempts: int = 3
+        max_gui_subtask_attempts: int = 3,
+        history_summary_interval: int = 8
     ):
-        """
-        Initialize the framework.
-        
-        Args:
-            coordinator_model: Model for high-level planning
-            operator_model: Model for GUI operations
-            operator_client_password: Password for sudo operations
-            screen_width: Screen width in pixels
-            screen_height: Screen height in pixels
-            sleep_after_execution: Sleep time after each GUI action
-            llm_config_path: Path to LLM configuration
-            max_steps: Maximum number of operations
-            history_save_dir: Directory to save execution history
-            max_gui_subtask_attempts: Maximum number of attempts for a GUI subtask
-        """
         self.coordinator_model = coordinator_model
         self.operator_model = operator_model
         self.client_password = operator_client_password
@@ -766,9 +929,15 @@ class MyAgentFramework:
         self.max_steps = max_steps
         self.history_save_dir = history_save_dir
         self.max_gui_subtask_attempts = max_gui_subtask_attempts
+        self.history_summary_interval = history_summary_interval
         
         self.workflow = create_workflow()
         self.env = None
+        
+        # Initialize LLM clients
+        logger = logging.getLogger("desktopenv")
+        self.coordinator_llm = AbstractLLM(coordinator_model, logger=logger)
+        self.operator_llm = AbstractLLM(operator_model, logger=logger)
     
     def setup_environment(
         self, 
@@ -790,20 +959,15 @@ class MyAgentFramework:
         task_config: dict,
         additional_context: Optional[str] = None
     ) -> float:
-        """
-        Execute a task using the LangGraph workflow.
-        
-        Args:
-            task_config: Task configuration
-            additional_context: Optional additional context
-            
-        Returns:
-            Task score
-        """
+        """Execute a task using the LangGraph workflow."""
         if not self.env:
             raise ValueError("Environment not initialized. Call setup_environment() first.")
         
         logger = logging.getLogger("desktopenv")
+        
+        # Reset LLM usage stats before each task
+        self.coordinator_llm.reset_stats()
+        self.operator_llm.reset_stats()
         
         # Reset environment
         self.env.reset(task_config=task_config)
@@ -815,7 +979,7 @@ class MyAgentFramework:
         # Get initial screenshot
         screenshot = self.env.controller.get_screenshot()
         
-        # Initialize state
+        # Initialize state with LLM clients
         initial_state = {
             "task_instruction": task_config["instruction"],
             "additional_context": additional_context or "",
@@ -834,7 +998,6 @@ class MyAgentFramework:
             "consecutive_gui_failures": 0,
             "action_logs": [],
             "conversation_history": [],
-            "model_usage": {},
             "next_node": "coordinator",
             "task_completed": False,
             "task_infeasible": False,
@@ -847,7 +1010,10 @@ class MyAgentFramework:
             "screen_height": self.screen_height,
             "sleep_after_execution": self.sleep_after_execution,
             "max_steps": self.max_steps,
-            "max_gui_subtask_attempts": self.max_gui_subtask_attempts
+            "max_gui_subtask_attempts": self.max_gui_subtask_attempts,
+            "history_summary_interval": self.history_summary_interval,
+            "coordinator_llm": self.coordinator_llm,
+            "operator_llm": self.operator_llm,
         }
         
         logger.info("\n" + "="*80)

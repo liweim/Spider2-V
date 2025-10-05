@@ -7,8 +7,6 @@ import os
 import sys
 import shutil
 from typing import Dict, List, Tuple
-from functools import partial
-from multiprocessing import Pool, cpu_count
 from mm_agents.my_agent import MyAgentFramework
 import traceback
 from utils import build_additional_contexts, summary, save_args_to_settings
@@ -132,7 +130,7 @@ def main():
 
     # Agent config
     parser.add_argument("--llm_config_path", type=str, default="mm_agents/coact/OAI_CONFIG_LIST")
-    parser.add_argument("--coordinator_model", type=str, default="o3-2025-04-16",
+    parser.add_argument("--coordinator_model", type=str, default="o3",
                        help="Model for Coordinator agent")
     parser.add_argument("--max_steps", type=int, default=15,
                        help="Maximum steps for Coordinator")

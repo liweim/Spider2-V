@@ -16,7 +16,7 @@ from .autogen.agentchat.contrib.multimodal_conversable_agent import MultimodalCo
 
 from .cua_agent import run_cua
 from .coding_agent import TerminalProxyAgent, CODER_SYSTEM_MESSAGE
-from utils import get_price
+from llm import AbstractLLM
 
 ONLY_CUA = False #False 更新
 
@@ -163,8 +163,8 @@ class OrchestratorUserProxyAgent(MultimodalConversableAgent):
         coding_max_steps: int = 30,
         cut_off_steps: int = 200,
         history_save_dir: str = "",
-        coding_model: str = "o4-mini-2025-04-16",
-        summarizer_model: str = "o4-mini-2025-04-16",
+        coding_model: str = "o4-mini",
+        summarizer_model: str = "o4-mini",
         cua_model: str = "computer-use-preview",
         client_password: str = "",
         user_instruction: str = "",
@@ -274,7 +274,7 @@ class OrchestratorUserProxyAgent(MultimodalConversableAgent):
         if not os.path.exists(cua_path):
             os.makedirs(cua_path)
         try:
-            history_inputs, result, cost, input_tokens, output_tokens = run_cua(self.env,
+            history_inputs, result, cost, input_tokens, output_tokens, image_count = run_cua(self.env,
                                                    task,
                                                    save_path=cua_path,
                                                    max_steps=self.cua_config["max_steps"],
@@ -309,10 +309,11 @@ class OrchestratorUserProxyAgent(MultimodalConversableAgent):
             
             # Update model-specific usage
             if "cua" not in self.model_usage:
-                self.model_usage["cua"] = {"cost": 0.0, "prompt_tokens": 0, "completion_tokens": 0}
+                self.model_usage["cua"] = {"cost": 0.0, "prompt_tokens": 0, "completion_tokens": 0, "image_count": 0}
             self.model_usage["cua"]["cost"] += cost
             self.model_usage["cua"]["prompt_tokens"] += input_tokens
             self.model_usage["cua"]["completion_tokens"] += output_tokens
+            self.model_usage["cua"]["image_count"] += image_count
             
             self.cua_call_count += 1
 
@@ -339,6 +340,12 @@ class OrchestratorUserProxyAgent(MultimodalConversableAgent):
                 llm_config=LLMConfig(api_type="openai", model=self.coding_model),
                 system_message=CODER_SYSTEM_MESSAGE.format(CLIENT_PASSWORD=self.client_password),
             )
+            summarizer = ConversableAgent(
+                name="summarizer",
+                llm_config=LLMConfig(api_type="openai", model=self.summarizer_model),
+                system_message=self.CONVERSATION_REVIEW_PROMPT,
+            )
+            
             code_interpreter = TerminalProxyAgent(
                 name="code_interpreter",
                 human_input_mode="NEVER",
@@ -353,6 +360,7 @@ class OrchestratorUserProxyAgent(MultimodalConversableAgent):
                 is_termination_msg=lambda x: x.get("content", "") and x.get("content", "")[0]["text"].lower() == "terminate",
                 env=self.env,
             )
+            
             code_interpreter.initiate_chat(
                 recipient=coding_agent,
                 message=f"# Task\n{task}\n\n# Environment\n{environment}<img data:image/png;base64,{base64.b64encode(screenshot).decode('utf-8')}>",
@@ -393,11 +401,6 @@ class OrchestratorUserProxyAgent(MultimodalConversableAgent):
             self.coding_call_count += 1
 
             # Review the group chat history
-            summarizer = ConversableAgent(
-                name="summarizer",
-                llm_config=LLMConfig(api_type="openai", model=self.summarizer_model),
-                system_message=self.CONVERSATION_REVIEW_PROMPT,
-            )
             summarized_history = summarizer.generate_oai_reply(
                 messages=[
                     {
@@ -407,30 +410,48 @@ class OrchestratorUserProxyAgent(MultimodalConversableAgent):
                 ]
             )[1]
 
-            coding_usage = coding_agent.get_total_usage()
-            if "coding" not in self.model_usage:
-                self.model_usage["coding"] = {"cost": 0.0, "prompt_tokens": 0, "completion_tokens": 0}
-            prompt_tokens = coding_usage[self.coding_model].get("prompt_tokens", 0)
-            completion_tokens = coding_usage[self.coding_model].get("completion_tokens", 0)
-            prompt_price, completion_price = get_price(self.coding_model)
-            cost = prompt_tokens * prompt_price + completion_tokens * completion_price
-            self.model_usage["coding"]["cost"] += cost
-            self.model_usage["coding"]["prompt_tokens"] += prompt_tokens
-            self.model_usage["coding"]["completion_tokens"] += completion_tokens
-
-            summarizer_usage = summarizer.get_total_usage()
-            if "summarizer" not in self.model_usage:
-                self.model_usage["summarizer"] = {"cost": 0.0, "prompt_tokens": 0, "completion_tokens": 0}
-            prompt_tokens = summarizer_usage[self.summarizer_model].get("prompt_tokens", 0)
-            completion_tokens = summarizer_usage[self.summarizer_model].get("completion_tokens", 0)
-            prompt_price, completion_price = get_price(self.summarizer_model)
-            cost = prompt_tokens * prompt_price + completion_tokens * completion_price
-            self.model_usage["summarizer"]["cost"] += cost
-            self.model_usage["summarizer"]["prompt_tokens"] += prompt_tokens
-            self.model_usage["summarizer"]["completion_tokens"] += completion_tokens
-
         except Exception:
             return f"# Call coding agent error: {traceback.format_exc()}"
+        
+        finally:
+            if coding_agent:
+                # Use AbstractLLM to calculate cost
+                coding_llm = AbstractLLM(self.coding_model, logger=logging.getLogger("desktopenv"))
+                coding_usage = coding_agent.get_total_usage()
+                if "coding" not in self.model_usage:
+                    self.model_usage["coding"] = {"cost": 0.0, "prompt_tokens": 0, "completion_tokens": 0, "image_count": 0}
+                prompt_tokens = coding_usage[self.coding_model].get("prompt_tokens", 0)
+                completion_tokens = coding_usage[self.coding_model].get("completion_tokens", 0)
+                
+                # Use AbstractLLM's cost calculation
+                coding_llm.client.usage_stats.prompt_tokens = prompt_tokens
+                coding_llm.client.usage_stats.completion_tokens = completion_tokens
+                coding_llm.client.usage_stats.image_count = 1
+                cost, _, _, _ = coding_llm.get_usage()
+                
+                self.model_usage["coding"]["cost"] += cost
+                self.model_usage["coding"]["prompt_tokens"] += prompt_tokens
+                self.model_usage["coding"]["completion_tokens"] += completion_tokens
+                self.model_usage["coding"]["image_count"] += 1
+
+            if summarizer:
+                # Use AbstractLLM to calculate cost
+                summarizer_llm = AbstractLLM(self.summarizer_model, logger=logging.getLogger("desktopenv"))
+                summarizer_usage = summarizer.get_total_usage()
+                if "summarizer" not in self.model_usage:
+                    self.model_usage["summarizer"] = {"cost": 0.0, "prompt_tokens": 0, "completion_tokens": 0, "image_count": 0}
+                prompt_tokens = summarizer_usage[self.summarizer_model].get("prompt_tokens", 0)
+                completion_tokens = summarizer_usage[self.summarizer_model].get("completion_tokens", 0)
+                
+                # Use AbstractLLM's cost calculation
+                summarizer_llm.client.usage_stats.prompt_tokens = prompt_tokens
+                summarizer_llm.client.usage_stats.completion_tokens = completion_tokens
+                summarizer_llm.client.usage_stats.image_count = 0
+                cost, _, _, _ = summarizer_llm.get_usage()
+                
+                self.model_usage["summarizer"]["cost"] += cost
+                self.model_usage["summarizer"]["prompt_tokens"] += prompt_tokens
+                self.model_usage["summarizer"]["completion_tokens"] += completion_tokens
 
         screenshot = self.env.controller.get_screenshot()
         return f"# Response from coding agent: {summarized_history}"
