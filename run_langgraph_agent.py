@@ -220,7 +220,10 @@ def main():
             for task_id in test_all_meta[domain]:
                 target_dir = os.path.join(args.result_dir, f"{domain}/{task_id}")
                 result_path = os.path.join(target_dir, 'result.txt')
-                cfg = json.load(open(os.path.join(args.test_config_base_dir, f"{domain}/{task_id}/{task_id}.json")))
+                cfg_path = os.path.join(args.test_config_base_dir, f"{domain}/{task_id}/{task_id}.json")
+                if not os.path.exists(cfg_path):
+                    cfg_path = os.path.join(args.test_config_base_dir, f"{domain}/{task_id}.json")
+                cfg = json.load(open(cfg_path))
                 
                 # Check if we should skip this task
                 should_skip = False

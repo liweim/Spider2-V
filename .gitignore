@@ -2,6 +2,7 @@ configs
 ~$*.xlsx
 data
 mm_agents/coact/OAI_CONFIG_LIST
+results*
 
 # Model checkpoints
 *.pth

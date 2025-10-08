@@ -507,6 +507,14 @@ def check_file_existence(result: str) -> float:
     else:
         return 1.
 
+def match_in_list(result, rules) -> float:
+    expect = rules["expected"]
+    print(result, expect)
+
+    if result in expect:
+        return 1.
+    else:
+        return 0.
     
 if __name__ == '__main__':
     print(check_direct_json_object([], rules={
