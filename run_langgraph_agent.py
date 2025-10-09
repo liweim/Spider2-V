@@ -227,7 +227,7 @@ def main():
                 
                 # Check if we should skip this task
                 should_skip = False
-                if not args.rerun and os.path.exists(result_path) and not os.path.exists(os.path.join(target_dir, 'error.txt')):
+                if not args.rerun and os.path.exists(result_path) and not os.path.exists(os.path.join(target_dir, 'err_reason.txt')):
                     result = float(open(result_path, 'r').read())
                     
                     # Skip successful tasks, or skip failed tasks if not rerun_fail

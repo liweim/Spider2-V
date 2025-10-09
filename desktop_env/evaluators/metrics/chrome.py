@@ -412,30 +412,3 @@ def is_added_to_steam_cart(active_tab_info, rule):
             return 0.
 
     return 1.
-
-def is_expected_active_tab_approximate(active_tab_info: Dict[str, str], rule: Dict[str, Any]) -> float:
-    """
-    Checks if the expected active tab is open in Chrome, ignoring query parameters in the URL.
-    """
-    if not active_tab_info:
-        return 0.
-
-    match_type = rule['type']
-
-    if match_type == "url":
-        expected_url = rule['url']
-        if isinstance(active_tab_info, Dict):
-            actual_url = active_tab_info.get('url', None)
-        else:
-            actual_url = active_tab_info
-        from urllib.parse import urlparse, urlunparse
-        def strip_query(url):
-            parsed = urlparse(url)
-            return urlunparse(parsed._replace(query=""))
-        if strip_query(expected_url) == strip_query(actual_url):
-            return 1
-        else:
-            return 0
-    else:
-        logger.error(f"Unknown type: {match_type}")
-        return 0

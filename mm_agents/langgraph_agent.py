@@ -355,7 +355,13 @@ Continue with the task or verify if completed. Current screenshot attached below
         
         # Parse JSON response or handle direct bash execution
         try:
-            if "```json" in response_text:
+            if response_text.lower() == "infeasible":
+                decision = {
+                    "thought": response_text,
+                    "action": "terminate",
+                    "content": response_text
+                }
+            elif "```json" in response_text:
                 json_start = response_text.find("```json") + 7
                 json_end = response_text.find("```", json_start)
                 response_text = response_text[json_start:json_end].strip()
@@ -760,6 +766,10 @@ def evaluator_node(state: AgentState) -> dict:
     logger.info("="*80)
     
     try:
+        logger.info("Task completed, press Esc to close the temporary window")
+        esc_cmd = "pyautogui.press('esc')"
+        obs, *_ = env.step(esc_cmd, 0.5)
+
         score = env.evaluate()
     except Exception as e:
         logger.error(f"Evaluation error: {e}")

@@ -22,8 +22,7 @@ from .chrome import (
     is_added_to_steam_cart,
     is_expected_installed_extensions,
     compare_pdf_images,
-    compare_json_file,
-    is_expected_active_tab_approximate
+    compare_json_file
 )
 from .docs import (
     compare_font_names,
@@ -54,8 +53,7 @@ from .docs import (
     compare_docx_files_and_ignore_new_lines,
     compare_docx_images,
     compare_image_text,
-    compare_references,
-    compare_unique_train_records
+    compare_references
 )
 from .general import (
     check_csv,
@@ -79,8 +77,7 @@ from .general import (
     fuzzy_place_math,
     compare_python_pure_text,
     diff_text_file,
-    literal_match,
-    match_in_list
+    literal_match
 )
 from .gimp import (
     check_structure_sim_resized,

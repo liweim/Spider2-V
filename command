@@ -8,8 +8,6 @@ python run_my_agent.py --result_dir results/my_agent_o4mini_50_rag_verbose --sna
 
 python run_langgraph_agent.py --result_dir results/langgraph_o4mini_cua_50_rag_verbose --snapshot config --coordinator_model o4-mini --operator_model computer-use-preview --max_steps 50 --rag --verbose_instruction --test_all_meta_path evaluation_examples/test_small.json --headless
 
-python run_langgraph_agent.py --result_dir results_osworld/langgraph_o4mini_cua_50_rag_verbose --path_to_vm D:/projects/OSWorld/vmware_vm_data/Ubuntu0/Ubuntu0.vmx --snapshot fix_bug --coordinator_model o4-mini --operator_model computer-use-preview --max_steps 50 --test_config_base_dir D:/projects/OSWorld/evaluation_examples/examples --test_all_meta_path D:/projects/OSWorld/evaluation_examples/test_small.json --headless
-
 #复现过程
 打开虚拟机改里面的内容，更新代码：/home/user/server/main.py，保存快照，确保分辨率为1920x1080
 sudo systemctl daemon-reload
@@ -29,3 +27,5 @@ workarena-install
 
 $env:OPENAI_API_KEY="sk-E7gOgfTjf0tREnYXEa1767178b7f43499eBdA49389CdD905"
 $env:OPENAI_API_BASE="https://api2.road2all.com/v1"
+
+# OSWorld上需要安装dos2unix
