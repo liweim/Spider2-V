@@ -241,7 +241,7 @@ class DesktopEnv(gym.Env):
 
         if task_config is not None:
             self.setup_controller.setup(self.config)
-        time.sleep(5)
+        time.sleep(30)
         logger.info("Environment setup complete.")
 
         observation = self._get_obs()
