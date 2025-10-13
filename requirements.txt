@@ -74,3 +74,5 @@ termcolor
 autogen
 ag2
 json_repair
+qwen-vl-utils==0.0.8
+transformers==4.52.3

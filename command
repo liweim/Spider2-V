@@ -8,6 +8,8 @@ python run_my_agent.py --result_dir results/my_agent_o4mini_50_rag_verbose --sna
 
 python run_langgraph_agent.py --result_dir results/langgraph_o4mini_cua_50_rag_verbose --snapshot config --coordinator_model o4-mini --operator_model computer-use-preview --max_steps 50 --rag --verbose_instruction --test_all_meta_path evaluation_examples/test_small.json --headless
 
+python run_langgraph_agent.py --result_dir results/langgraph_gpt5_cua_50_summarize_rag_verbose --snapshot config --coordinator_model gpt-5 --operator_model computer-use-preview --max_steps 50 --summarize_rag --rag --verbose_instruction --test_all_meta_path evaluation_examples/test_small.json --headless
+
 #复现过程
 打开虚拟机改里面的内容，更新代码：/home/user/server/main.py，保存快照，确保分辨率为1920x1080
 sudo systemctl daemon-reload
