@@ -35,6 +35,17 @@ logger = logging.getLogger("desktopenv.experiment")
 
 ALL_DOMAINS = ['excel', 'servicenow', 'jupyter', 'dbt', 'airflow', 'dagster', 'airbyte', 'snowflake', 'bigquery', 'superset', 'metabase']
 
+def get_retrieved_context(config_path: str, topk: int = 4, file_name: str = "retrieved_chunk_size_512_chunk_overlap_20_topk_4_embed_bge-large-en-v1.5.txt") -> str:
+    context_path = os.path.join(os.path.dirname(config_path), file_name)
+    if os.path.exists(context_path):
+        with open(context_path, "r", encoding="utf-8") as f:
+            context = f.read().strip()
+        if context.strip() == "": return None
+        splits = context.split("Documentation Source:")
+        if len(splits) > topk + 1: # the first is ""
+            return "Documentation Source:".join(splits[:topk + 1])
+        return context
+    raise ValueError(f"Retrieved context not found under {os.path.dirname(config_path)}")
 
 def config() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run end-to-end evaluation on the benchmark")
@@ -135,17 +146,8 @@ def test(args: argparse.Namespace, test_all_meta: List[dict]) -> dict:
             example = json.load(f)
 
         # Build context using the common function
-        example_dir = os.path.dirname(config_file)
-        additional_context = build_additional_contexts(
-            task_config=example,
-            example_dir=example_dir,
-            use_rag=args.rag,
-            use_verbose_instruction=args.verbose_instruction,
-            rag_topk=args.rag_topk,
-            rag_filename=args.rag_filename
-        )
-        
-        example['context'] = additional_context
+        if args.rag: example['context'] = get_retrieved_context(config_file, args.rag_topk, file_name=args.rag_filename)
+        else: example['context'] = None
 
         # root_logger = logging.getLogger()
         # example_handler = logging.FileHandler(os.path.join(result_dir, "result-{:}.log".format(datetime_str)), encoding="utf-8")

@@ -302,12 +302,13 @@ class PromptAgent:
         })
 
         if context is not None:
+            context_message = "We also retrieve relevant documentation from the web to help you with the task:\n{}".format(context)
             messages.append({
                 "role": "system",
                 "content": [
                     {
                         "type": "text",
-                        "text": context
+                        "text": context_message
                     },
                 ]
             })
