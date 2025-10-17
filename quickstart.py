@@ -60,5 +60,5 @@ def sample():
     # json.dump(sample_data, open("evaluation_examples/check_account.json", "w"), indent=4)
 
 if __name__ == "__main__":
-    # setup()
-    sample()
+    setup()
+    # sample()
