@@ -214,7 +214,6 @@ def run():
                 action_space=args.action_space,
                 headless=args.headless,
                 require_a11y_tree=False,
-                screen_size=(args.screen_width, args.screen_height)
             )
     args.env = env
 

@@ -31,10 +31,10 @@ def run_human_agent():
     python run_spider2v_human.py -p /path/to/vm.vmx -s {snapshot_name} -e evaluation_examples/test_non_account.json
     """
     parser = argparse.ArgumentParser()
-    parser.add_argument('-p', '--path_to_vm', type=str, help="path to the virtual machine .vmx file.")
-    parser.add_argument('-s', '--snapshot', type=str, default="init_state", help="snapshot name")
+    parser.add_argument('-p', '--path_to_vm', type=str, default="vm_data/Ubuntu0/Ubuntu0/Ubuntu0.vmx", help="path to the virtual machine .vmx file.")
+    parser.add_argument('-s', '--snapshot', type=str, default="config", help="snapshot name")
     parser.add_argument('-e', '--example', type=str, help='.json file path to examples')
-    parser.add_argument('-r', '--recording', default='recordings', help='folder to save trajectory videos')
+    parser.add_argument('-r', '--recording', default='results/recordings', help='folder to save trajectory videos')
     args = parser.parse_args()
     os.makedirs(args.recording, exist_ok=True)
 
