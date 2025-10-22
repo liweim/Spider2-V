@@ -5,6 +5,8 @@ mm_agents/coact/OAI_CONFIG_LIST
 **retrieved_instruction.txt
 .DS_Store
 logs
+kb_s2
+kb_s1
 
 # Model checkpoints
 *.pth
