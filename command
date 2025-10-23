@@ -6,10 +6,8 @@ python run_langgraph_agent.py --result_dir results/langgraph_gpt5_cua_50_summari
 
 #复现过程
 打开虚拟机改里面的内容，更新代码：/home/user/server/main.py，保存快照，确保分辨率为1920x1080
-sudo systemctl daemon-reload
-sudo systemctl enable osworld_server@:0.service #/etc/systemd/system/osworld_server@.service
-sudo systemctl start osworld_server@:0.service
-把需要账号的全登录一遍
+sudo systemctl restart osworld_server@:0.service
+!!!!!绝对不能复制vm_data，会报错!!!!!!
 
 ## servicenow
 pip install browsergym

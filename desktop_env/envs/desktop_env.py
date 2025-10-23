@@ -283,7 +283,6 @@ class DesktopEnv(gym.Env):
         """
         Evaluate whether the task is successfully completed.
         """
-
         self.setup_controller.setup(self.evaluator.get("postconfig", []))
 
         if self.evaluator['func'] == "infeasible":

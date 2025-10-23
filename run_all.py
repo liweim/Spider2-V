@@ -1,6 +1,7 @@
 import argparse
 import os
 import sys
+import shutil
 sys.path.append("../GUIAgent")
 
 def run():
