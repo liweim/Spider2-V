@@ -7,17 +7,25 @@ python run_langgraph_agent.py --result_dir results/langgraph_gpt5_cua_50_summari
 #复现过程
 打开虚拟机改里面的内容，更新代码：/home/user/server/main.py，保存快照，确保分辨率为1920x1080
 sudo systemctl restart osworld_server@:0.service
-!!!!!绝对不能复制vm_data，会报错!!!!!!
+pip install playwright
+playwright install
 
 ## servicenow
-pip install browsergym
+pip install browsergym-workarena==0.2.1 #版本改了就验证对不上了
 playwright install
 $env:SNOW_INSTANCE_URL="https://empmassimo12.service-now.com/"
 $env:SNOW_INSTANCE_UNAME="admin"
 $env:SNOW_INSTANCE_PWD="^lq3Q+XKK9?n"
 workarena-install
 
-## dbt，需要双重验证且pydantic<2，与autogen冲突
+## dbt
+需要双重验证且pydantic<2，与autogen冲突
+
+## snowflake
+只有一个月试用
+
+## bigquery
+需要双重验证
 
 $env:OPENAI_API_KEY="sk-E7gOgfTjf0tREnYXEa1767178b7f43499eBdA49389CdD905"
 $env:OPENAI_API_BASE="https://api2.road2all.com/v1"

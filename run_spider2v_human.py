@@ -33,7 +33,7 @@ def run_human_agent():
     parser = argparse.ArgumentParser()
     parser.add_argument('-p', '--path_to_vm', type=str, default="vm_data/Ubuntu0/Ubuntu0/Ubuntu0.vmx", help="path to the virtual machine .vmx file.")
     parser.add_argument('-s', '--snapshot', type=str, default="config", help="snapshot name")
-    parser.add_argument('-e', '--example', type=str, help='.json file path to examples')
+    parser.add_argument('-e', '--example', type=str, default="evaluation_examples/human.json", help='.json file path to examples')
     parser.add_argument('-r', '--recording', default='results/recordings', help='folder to save trajectory videos')
     args = parser.parse_args()
     os.makedirs(args.recording, exist_ok=True)
@@ -57,7 +57,7 @@ def run_human_agent():
 
             # reset the environment
             env.reset(task_config=example)
-            logger.info(f'\x1b[32m[Task instruction for {example["snapshot"]}/{example["id"]}]:\x1b \n{example["instruction"]}\x1b[0m')
+            logger.info(f'\x1b[32m[Task instruction for {example["snapshot"]}/{example["id"]}]:\x1b[0m\n\x1b[32m{example["instruction"]}\x1b[0m')
             
             # recoding the human trajectory
             recording_path = os.path.join(args.recording, example["id"])
@@ -89,7 +89,7 @@ def run_human_agent():
                     logger.info(f"Evaluation score: {score}")
                 elif action.strip() in ['5', 'reset']: # reset the environment
                     env.reset(task_config=example)
-                    logger.info(f'\x1b[32m[Task instruction for example {example["snapshot"]}/{example["id"]}]:\x1b \n{example["instruction"]}\x1b[0m')
+                    logger.info(f'\x1b[32m[Task instruction for {example["snapshot"]}/{example["id"]}]:\x1b[0m\n\x1b[32m{example["instruction"]}\x1b[0m')
                 elif action.strip() in ['6', 'verbose']:
                     logger.info(f'Verbose instruciton is: {verbose_instruction if verbose_instruction else "Not found."}')
                 elif action.strip() in ['7', 'next']:

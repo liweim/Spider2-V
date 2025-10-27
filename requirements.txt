@@ -59,7 +59,8 @@ google-cloud-bigquery==3.14.1
 google-cloud-bigquery-connection==1.15.3
 dbt-cloud-cli==0.8.2
 nbformat==5.10.4
-browsergym
+# browsergym
+browsergym-workarena==0.2.1
 groq
 llama_index
 llama-index-embeddings-huggingface

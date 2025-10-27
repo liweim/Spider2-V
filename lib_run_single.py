@@ -7,6 +7,91 @@ from utils import serialize_json
 
 logger = logging.getLogger("desktopenv.experiment")
 
+
+def filter_base64_images_from_messages(messages: list) -> list:
+    """Remove base64 images from messages for logging purposes."""
+    filtered_messages = []
+    for msg in messages:
+        filtered_msg = {"role": msg["role"]}
+        content = msg["content"]
+        
+        if isinstance(content, str):
+            # String content - keep as is
+            filtered_msg["content"] = content
+        elif isinstance(content, list):
+            # List content - filter out images
+            filtered_content = []
+            for item in content:
+                if item.get("type") == "input_text":
+                    filtered_content.append(item)
+                elif item.get("type") == "input_image":
+                    # Replace image with placeholder
+                    filtered_content.append({
+                        "type": "input_image",
+                    })
+            filtered_msg["content"] = filtered_content
+        else:
+            filtered_msg["content"] = content
+        
+        filtered_messages.append(filtered_msg)
+    
+    return filtered_messages
+
+
+def merge_conversation_and_actions(conversation_history: list, action_logs: list) -> list:
+    """Merge conversation messages and action logs into a unified timeline."""
+    timeline = []
+    
+    # Filter conversation messages to remove base64 images
+    filtered_messages = filter_base64_images_from_messages(conversation_history)
+    
+    # Group messages into pairs (user + assistant)
+    message_pairs = []
+    i = 0
+    while i < len(filtered_messages):
+        if filtered_messages[i]["role"] == "user":
+            user_msg = filtered_messages[i]
+            assistant_msg = filtered_messages[i + 1] if i + 1 < len(filtered_messages) else None
+            message_pairs.append({"user": user_msg, "assistant": assistant_msg})
+            i += 2
+        else:
+            i += 1
+    
+    # Match conversation pairs with action logs
+    # First pair is initial task instruction (step 0)
+    if message_pairs:
+        first_pair = message_pairs[0]
+        timeline.append({
+            "step": 0,
+            "type": "task_instruction",
+            "user_message": first_pair["user"]["content"],
+            "assistant_response": first_pair["assistant"]["content"] if first_pair["assistant"] else None
+        })
+    
+    # Process remaining pairs with corresponding actions
+    for idx, pair in enumerate(message_pairs[1:], start=1):
+        # Add action log if available
+        if idx - 1 < len(action_logs):
+            action = action_logs[idx - 1].copy()
+            # Add conversation context to action
+            action["coordinator_decision"] = pair["assistant"]["content"] if pair["assistant"] else None
+            action["execution_result"] = pair["user"]["content"] if idx < len(message_pairs) else None
+            timeline.append(action)
+        else:
+            # No action log, just record the conversation
+            timeline.append({
+                "step": idx,
+                "type": "conversation_only",
+                "user_message": pair["user"]["content"],
+                "assistant_response": pair["assistant"]["content"] if pair["assistant"] else None
+            })
+    
+    # Add any remaining action logs that don't have conversation pairs
+    for idx in range(len(message_pairs) - 1, len(action_logs)):
+        timeline.append(action_logs[idx])
+    
+    return timeline
+
 TIME_LIMIT = 1800 # 30 minutes for each example at most
 
 @timeout(TIME_LIMIT, use_signals=False)
@@ -22,6 +107,12 @@ def run_single_example(agent: PromptAgent, env: DesktopEnv, example: dict, resul
     # Initialize action logs for statistics tracking
     action_logs = []
     chat_history = []
+    
+    # Add initial task instruction to chat history
+    chat_history.append({
+        "role": "user",
+        "content": example['instruction']
+    })
 
     while not done and step_idx < args.max_steps:
         context = example['context'] if 'context' in example else None
@@ -98,6 +189,9 @@ def run_single_example(agent: PromptAgent, env: DesktopEnv, example: dict, resul
 
     additional_context = example.get('context', '')
     
+    # Merge conversation history and action logs into unified timeline
+    unified_timeline = merge_conversation_and_actions(chat_history, action_logs)
+    
     unified_log = {
         "statistics": {
             "score": result,
@@ -108,8 +202,7 @@ def run_single_example(agent: PromptAgent, env: DesktopEnv, example: dict, resul
         },
         "task_config": example,
         "additional_context": additional_context,
-        "chat_history": chat_history,
-        "action_logs": action_logs,
+        "action_logs": unified_timeline,
     }
     
     # Save unified execution log
