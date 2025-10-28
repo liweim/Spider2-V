@@ -252,5 +252,10 @@ def run():
 
         run_agents2(args)
 
+    elif args.method == "tool_agent":
+        from run_tool_agent import run_tool_agent
+
+        run_tool_agent(args)
+
 if __name__ == "__main__":
     run()

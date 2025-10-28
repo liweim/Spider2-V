@@ -163,7 +163,6 @@ recordings/
 # tmp files
 **/tmp/**/*
 api_key.py
-tmp.*
 
 ## Server logging
 **/.logging/**/*

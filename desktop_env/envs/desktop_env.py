@@ -53,7 +53,9 @@ class DesktopEnv(gym.Env):
             headless: bool = False,
             require_a11y_tree: bool = True,
             require_terminal: bool = False,
-            proxy: Dict[str, Any] = {}
+            proxy: Dict[str, Any] = {},
+            screen_width: int = 1920,
+            screen_height: int = 1080
     ):
         """
         Args:
@@ -76,7 +78,8 @@ class DesktopEnv(gym.Env):
         self.path_to_vm = os.path.abspath(os.path.expandvars(os.path.expanduser(path_to_vm if path_to_vm else _get_vm_path())))
         self.snapshot_name = snapshot_name
         self.cache_dir_base: str = cache_dir
-        # todo: add the logic to get the screen size from the VM
+        self.screen_width = screen_width
+        self.screen_height = screen_height
         self.headless = headless
         self.require_a11y_tree = require_a11y_tree
         self.require_terminal = require_terminal
@@ -84,7 +87,7 @@ class DesktopEnv(gym.Env):
         # Initialize emulator and controller
         self._start_emulator()
         self.vm_ip = self._get_vm_ip()
-        self.controller = PythonController(vm_ip=self.vm_ip)
+        self.controller = PythonController(vm_ip=self.vm_ip, screen_width=self.screen_width, screen_height=self.screen_height)
         self.setup_controller = SetupController(vm_ip=self.vm_ip, cache_dir=self.cache_dir_base)
 
         # mode: human or machine
