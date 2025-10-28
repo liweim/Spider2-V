@@ -5,8 +5,6 @@ from typing import Any, Dict, Optional
 import time
 import traceback
 import requests
-from PIL import Image
-import io
 
 from desktop_env.envs.actions import KEYBOARD_KEYS
 
@@ -15,57 +13,29 @@ logger = logging.getLogger("desktopenv.pycontroller")
 
 class PythonController:
     def __init__(self, vm_ip: str,
-                 pkgs_prefix: str = "import pyautogui; import time; pyautogui.FAILSAFE = False; {command}",
-                 screen_width: int = 1920,
-                 screen_height: int = 1080):
+                 pkgs_prefix: str = "import pyautogui; import time; pyautogui.FAILSAFE = False; {command}"):
         self.vm_ip = vm_ip
         self.http_server = f"http://{vm_ip}:5000"
-        self.pkgs_prefix = pkgs_prefix
+        self.pkgs_prefix = pkgs_prefix  # fixme: this is a hacky way to execute python commands. fix it and combine it with installation of packages
         self.retry_times = 3
         self.retry_interval = 10
-        self.screen_width = screen_width
-        self.screen_height = screen_height
 
     def get_screenshot(self, retry_times=5):
         """
         Gets a screenshot from the server. With the cursor.
-        Ensures screenshot dimensions match expected screen size.
         """
         response = requests.get(self.http_server + "/screenshot")
         if response.status_code == 200:
-            screenshot_bytes = response.content
-            return self._ensure_screenshot_size(screenshot_bytes)
+            return response.content
         else:
             for _ in range(retry_times):
                 logger.error("Failed to get screenshot. Status code: %d", response.status_code)
                 logger.info("Retrying to get screenshot.")
                 response = requests.get(self.http_server + "/screenshot")
                 if response.status_code == 200:
-                    screenshot_bytes = response.content
-                    return self._ensure_screenshot_size(screenshot_bytes)
+                    return response.content
             logger.error("Failed to get screenshot. Status code: %d", response.status_code)
             return None
-
-    def _ensure_screenshot_size(self, screenshot_bytes: bytes) -> bytes:
-        """Ensure screenshot matches expected screen dimensions."""
-        try:
-            img = Image.open(io.BytesIO(screenshot_bytes))
-            current_width, current_height = img.size
-            expected_width, expected_height = self.screen_width, self.screen_height
-            
-            if current_width != expected_width or current_height != expected_height:
-                logger.info(f"Resizing screenshot from {current_width}x{current_height} to {expected_width}x{expected_height}")
-                img_resized = img.resize((expected_width, expected_height), Image.Resampling.LANCZOS)
-                
-                output_buffer = io.BytesIO()
-                img_resized.save(output_buffer, format='PNG')
-                return output_buffer.getvalue()
-            
-            return screenshot_bytes
-            
-        except Exception as e:
-            logger.warning(f"Failed to process screenshot dimensions: {e}")
-            return screenshot_bytes
 
     def get_terminal_output(self, retry_times=5):
         """ Gets the terminal output from the server. None -> no terminal output or unexpected error.
