@@ -50,6 +50,7 @@ class DesktopEnv(gym.Env):
             snapshot_name: str = "init_state",
             action_space: str = "computer_13",
             cache_dir: str = "cache",
+            screen_size: Tuple[int, int] = (int(os.environ.get("SCREEN_WIDTH", 1920)), int(os.environ.get("SCREEN_HEIGHT", 1080))),
             headless: bool = False,
             require_a11y_tree: bool = True,
             require_terminal: bool = False,
@@ -62,7 +63,8 @@ class DesktopEnv(gym.Env):
             action_space (str): "computer_13" | "pyautogui"
             cache_dir (str): cache directory to cache task-related stuffs like
               reference file for evaluation
-            screen_size (Tuple[int]): screen size of the VM
+            screen_size (Tuple[int, int]): screen size of the VM, default to (1920, 1080),
+              can be overridden by SCREEN_WIDTH and SCREEN_HEIGHT environment variables
             headless (bool): whether to run the VM in headless mode
             require_a11y_tree (bool): whether to require accessibility tree
             require_terminal (bool): whether to require terminal output
@@ -76,7 +78,8 @@ class DesktopEnv(gym.Env):
         self.path_to_vm = os.path.abspath(os.path.expandvars(os.path.expanduser(path_to_vm if path_to_vm else _get_vm_path())))
         self.snapshot_name = snapshot_name
         self.cache_dir_base: str = cache_dir
-        # todo: add the logic to get the screen size from the VM
+        self.screen_width = screen_size[0]
+        self.screen_height = screen_size[1]
         self.headless = headless
         self.require_a11y_tree = require_a11y_tree
         self.require_terminal = require_terminal
@@ -85,7 +88,7 @@ class DesktopEnv(gym.Env):
         self._start_emulator()
         self.vm_ip = self._get_vm_ip()
         self.controller = PythonController(vm_ip=self.vm_ip)
-        self.setup_controller = SetupController(vm_ip=self.vm_ip, cache_dir=self.cache_dir_base)
+        self.setup_controller = SetupController(vm_ip=self.vm_ip, cache_dir=self.cache_dir_base, screen_width=self.screen_width, screen_height=self.screen_height)
 
         # mode: human or machine
         self.instruction = None
@@ -109,9 +112,57 @@ class DesktopEnv(gym.Env):
     def vm_platform(self):
         return self.controller.get_vm_platform()
 
-    @cached_property
+    @property
     def vm_screen_size(self):
+        """Get current VM screen size (dynamically, not cached)"""
         return self.controller.get_vm_screen_size()
+
+    def verify_screen_size(self) -> bool:
+        """
+        Verify if current VM screen size matches expected size
+
+        Returns:
+            bool: True if matches, False otherwise
+        """
+        try:
+            current_size = self.vm_screen_size
+            if current_size:
+                current_width = current_size.get('width')
+                current_height = current_size.get('height')
+
+                if current_width == self.screen_width and current_height == self.screen_height:
+                    return True
+                else:
+                    logger.warning(
+                        f"Screen size mismatch! Expected: {self.screen_width}x{self.screen_height}, "
+                        f"Current: {current_width}x{current_height}"
+                    )
+                    return False
+        except Exception as e:
+            logger.error(f"Failed to verify screen size: {e}")
+            return False
+
+    def ensure_screen_size(self) -> bool:
+        """
+        Ensure VM screen size matches expected size, reset if necessary
+
+        Returns:
+            bool: True if size is correct or successfully reset, False otherwise
+        """
+        if not self.verify_screen_size():
+            logger.info("Attempting to restore screen resolution...")
+            try:
+                self.setup_controller._set_resolution_setup(
+                    width=self.screen_width,
+                    height=self.screen_height,
+                    method="auto"
+                )
+                # Verify again
+                return self.verify_screen_size()
+            except Exception as e:
+                logger.error(f"Failed to restore screen resolution: {e}")
+                return False
+        return True
 
     def _start_emulator(self):
         while True:
@@ -234,6 +285,19 @@ class DesktopEnv(gym.Env):
         logger.info("Setting up environment ...")
         if not self.setup_controller._network_setup(self.vm_platform):
             logger.error("Network is not available!")
+
+        # Set screen resolution after network is up
+        try:
+            logger.info(f"Setting screen resolution to {self.screen_width}x{self.screen_height} ...")
+            self.setup_controller._set_resolution_setup(
+                width=self.screen_width,
+                height=self.screen_height,
+                method="auto"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to set screen resolution automatically: {e}")
+            logger.warning("You may need to set the resolution manually in the VM")
+
         if self.proxy or proxy: # using proxy to visit some webs, e.g., Google Cloud, Snowflake
             proxy = proxy if proxy else self.proxy
             self.setup_controller._proxy_setup(proxy=proxy, controller=self.controller)

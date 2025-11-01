@@ -32,11 +32,13 @@ FILE_PATH = os.path.dirname(os.path.abspath(__file__))
 
 
 class SetupController:
-    def __init__(self, vm_ip: str, cache_dir: str):
+    def __init__(self, vm_ip: str, cache_dir: str, screen_width: int = 1920, screen_height: int = 1080):
         self.vm_ip: str = vm_ip
         self.http_server: str = f"http://{vm_ip}:5000"
         self.http_server_setup_root: str = f"http://{vm_ip}:5000/setup"
         self.cache_dir: str = cache_dir
+        self.screen_width: int = screen_width
+        self.screen_height: int = screen_height
 
     def reset_cache_dir(self, cache_dir: str):
         self.cache_dir = cache_dir
@@ -51,6 +53,9 @@ class SetupController:
                 output(str): the standard output of the execution
                 error(str): the standard error of the execution
         """
+        # Replace screen size placeholders in command
+        command = self._replace_screen_placeholders(command)
+
         nb_failings, results = 0, {"status": "failed", "returncode": 1, "output": "", "error": ""}
         while nb_failings < retries:
             try:
@@ -381,6 +386,9 @@ class SetupController:
             logger.warning("Command should be a list of strings. Now it is a string. Will split it by space.")
             command = command.split()
 
+        # Replace screen size placeholders in command
+        command = self._replace_screen_placeholders(command)
+
         payload = json.dumps({"command": command, "shell": shell})
         headers = {"Content-Type": "application/json"}
 
@@ -392,6 +400,36 @@ class SetupController:
                 logger.error("Failed to launch application. Status code: %s", response.text)
         except requests.exceptions.RequestException as e:
             logger.error("An error occurred while trying to send the request: %s", e)
+
+    def _replace_screen_placeholders(self, command: Union[str, List[str]]) -> Union[str, List[str]]:
+        """Replace screen size placeholders in commands
+
+        Supported placeholders:
+            {SCREEN_WIDTH}: Full screen width
+            {SCREEN_HEIGHT}: Full screen height
+            {SCREEN_WIDTH_HALF}: Half screen width
+            {SCREEN_HEIGHT_HALF}: Half screen height
+        """
+        width = self.screen_width
+        height = self.screen_height
+        width_half = str(width // 2)
+        height_half = str(height // 2)
+
+        if isinstance(command, str):
+            new_command = command.replace("{SCREEN_WIDTH}", str(width))
+            new_command = new_command.replace("{SCREEN_HEIGHT}", str(height))
+            new_command = new_command.replace("{SCREEN_WIDTH_HALF}", width_half)
+            new_command = new_command.replace("{SCREEN_HEIGHT_HALF}", height_half)
+            return new_command
+        else:
+            new_command_list = []
+            for item in command:
+                item = item.replace("{SCREEN_WIDTH}", str(width))
+                item = item.replace("{SCREEN_HEIGHT}", str(height))
+                item = item.replace("{SCREEN_WIDTH_HALF}", width_half)
+                item = item.replace("{SCREEN_HEIGHT_HALF}", height_half)
+                new_command_list.append(item)
+            return new_command_list
 
     def _execute_setup(
             self,
@@ -407,6 +445,9 @@ class SetupController:
         until: Dict[str, Any] = until or {}
         terminates: bool = False
         nb_failings = 0
+
+        # Replace screen size placeholders in command
+        command = self._replace_screen_placeholders(command)
 
         payload = json.dumps({"command": command, "shell": shell})
         headers = {"Content-Type": "application/json"}
@@ -452,6 +493,123 @@ class SetupController:
 
     def _sleep_setup(self, seconds: float):
         time.sleep(seconds)
+
+    def _set_resolution_setup(self, width: int = None, height: int = None, method: str = "auto"):
+        """
+        Set VM screen resolution
+
+        Args:
+            width (int): Target screen width, defaults to self.screen_width
+            height (int): Target screen height, defaults to self.screen_height
+            method (str): Method to use for setting resolution
+                - "auto": Try multiple methods automatically (default)
+                - "xrandr": Use xrandr command (works on most Linux systems)
+                - "gnome": Use GNOME settings (for GNOME desktop)
+        """
+        # Use default screen size if not specified
+        target_width = width if width is not None else self.screen_width
+        target_height = height if height is not None else self.screen_height
+
+        logger.info(f"Setting screen resolution to {target_width}x{target_height} using method: {method}")
+
+        if method == "auto" or method == "xrandr":
+            # Try xrandr first (most common method for Linux)
+            try:
+                # Get current display name
+                result = self._execution_result(command=["bash", "-c", "xrandr | grep ' connected' | awk '{print $1}'"])
+                display_name = result.get("output", "").strip().split('\n')[0] if result.get("output") else None
+
+                if display_name:
+                    logger.info(f"Found display: {display_name}")
+
+                    # Try to set resolution using xrandr
+                    resolution = f"{target_width}x{target_height}"
+
+                    # First, check if the resolution mode exists
+                    check_result = self._execution_result(command=["bash", "-c", f"xrandr | grep '{resolution}'"])
+
+                    if resolution in check_result.get("output", ""):
+                        # Mode exists, just switch to it
+                        logger.info(f"Resolution mode {resolution} exists, switching to it...")
+                        self._execute_setup(
+                            command=["xrandr", "--output", display_name, "--mode", resolution],
+                            shell=False
+                        )
+                        logger.info("✓ Resolution set successfully using xrandr")
+                        return True
+                    else:
+                        # Need to create the mode first
+                        logger.info(f"Creating new resolution mode {resolution}...")
+
+                        # Generate modeline using cvt
+                        cvt_result = self._execution_result(command=["cvt", str(target_width), str(target_height)])
+                        if cvt_result.get("returncode") == 0:
+                            # Parse modeline from cvt output
+                            # Example: Modeline "1920x1080_60.00"  173.00  1920 2048 2248 2576  1080 1083 1088 1120 -hsync +vsync
+                            modeline = None
+                            for line in cvt_result.get("output", "").split('\n'):
+                                if 'Modeline' in line:
+                                    # Extract modeline after "Modeline"
+                                    modeline = line.split('Modeline')[1].strip()
+                                    break
+
+                            if modeline:
+                                # Create new mode
+                                mode_name = f"{target_width}x{target_height}_60.00"
+                                self._execute_setup(
+                                    command=["bash", "-c", f"xrandr --newmode {modeline}"],
+                                    shell=False
+                                )
+
+                                # Add mode to display
+                                self._execute_setup(
+                                    command=["xrandr", "--addmode", display_name, mode_name],
+                                    shell=False
+                                )
+
+                                # Switch to the new mode
+                                self._execute_setup(
+                                    command=["xrandr", "--output", display_name, "--mode", mode_name],
+                                    shell=False
+                                )
+
+                                logger.info("✓ Resolution set successfully using xrandr with custom mode")
+                                return True
+
+                if method == "xrandr":
+                    logger.error("Failed to set resolution using xrandr")
+                    return False
+
+            except Exception as e:
+                logger.warning(f"xrandr method failed: {e}")
+                if method == "xrandr":
+                    raise
+
+        if method == "auto" or method == "gnome":
+            # Try GNOME settings as fallback
+            try:
+                logger.info("Trying GNOME settings method...")
+                resolution = f"{target_width}x{target_height}"
+
+                # Use gsettings to set resolution (for GNOME)
+                # Note: This may not work on all systems
+                self._execute_setup(
+                    command=["bash", "-c",
+                            f"gsettings set org.gnome.desktop.screensaver lock-enabled false && "
+                            f"xrandr --output $(xrandr | grep ' connected' | awk '{{print $1}}' | head -1) --mode {resolution}"],
+                    shell=False
+                )
+
+                logger.info("✓ Resolution set successfully using GNOME settings")
+                return True
+
+            except Exception as e:
+                logger.warning(f"GNOME settings method failed: {e}")
+                if method == "gnome":
+                    raise
+
+        logger.error(f"Failed to set resolution to {target_width}x{target_height}")
+        return False
 
     def _act_setup(self, action_seq: List[Union[Dict[str, Any], str]]):
         # TODO
