@@ -199,6 +199,9 @@ def run():
     )
     parser.add_argument("--kb_name", default="kb_s2", type=str, help="Knowledge base name for Agent S2")
 
+    parser.add_argument("--max_retries", type=int, default=1,
+                       help="Maximum retries on failure")
+
     args = parser.parse_args()
 
     if not os.path.exists(args.path_to_vm):

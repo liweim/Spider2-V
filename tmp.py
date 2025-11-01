@@ -217,8 +217,95 @@ def tmp8():
     df[result_name] = res
     df.to_excel(result_path, index=False)
 
+def tmp9():
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=False)
+        context = browser.new_context()
+        page = context.new_page()
+        
+        # Navigate to the Hardware page (you'll need to login first if required)
+        page.goto("https://empmassimo12.service-now.com/now/nav/ui/classic/params/target/alm_hardware_list.do")
+        
+        # Wait for the page to load
+        page.wait_for_load_state("networkidle")
+        
+        # Add first filter: Serial number is empty
+        page.click("button:has-text('AND')")  # Click AND to add filter
+        page.wait_for_timeout(500)
+        
+        # Select "Serial number" field
+        page.locator("select[aria-label='-- choose field --']").last.select_option(label="Serial number")
+        page.wait_for_timeout(300)
+        
+        # Select "is empty" operator
+        page.locator("select[aria-label='-- oper --']").last.select_option(label="is empty")
+        page.wait_for_timeout(300)
+        
+        # Add second filter: Model category is Computer
+        page.click("button:has-text('AND')")
+        page.wait_for_timeout(500)
+        
+        page.locator("select[aria-label='-- choose field --']").last.select_option(label="Model category")
+        page.wait_for_timeout(300)
+        
+        page.locator("select[aria-label='-- oper --']").last.select_option(label="is")
+        page.wait_for_timeout(300)
+        
+        page.locator("input[aria-label='-- value --']").last.fill("Computer")
+        page.wait_for_timeout(300)
+        
+        # Add third filter: Asset function is Shared
+        page.click("button:has-text('AND')")
+        page.wait_for_timeout(500)
+        
+        page.locator("select[aria-label='-- choose field --']").last.select_option(label="Asset function")
+        page.wait_for_timeout(300)
+        
+        page.locator("select[aria-label='-- oper --']").last.select_option(label="is")
+        page.wait_for_timeout(300)
+        
+        page.locator("input[aria-label='-- value --']").last.fill("Shared")
+        page.wait_for_timeout(300)
+        
+        # Add fourth filter: Display name contains Apple MacBook Pro 15
+        page.click("button:has-text('AND')")
+        page.wait_for_timeout(500)
+        
+        page.locator("select[aria-label='-- choose field --']").last.select_option(label="Display name")
+        page.wait_for_timeout(300)
+        
+        page.locator("select[aria-label='-- oper --']").last.select_option(label="contains")
+        page.wait_for_timeout(300)
+        
+        page.locator("input[aria-label='-- value --']").last.fill("Apple MacBook Pro 15")
+        page.wait_for_timeout(300)
+        
+        # Click Run button to apply filters
+        page.click("button:has-text('Run')")
+        page.wait_for_timeout(2000)
+        
+        # Wait for results to load
+        page.wait_for_selector("table.list_table", timeout=10000)
+        
+        print("Filters applied successfully!")
+        
+        # Optional: Extract and print results
+        rows = page.locator("table.list_table tbody tr").all()
+        print(f"Found {len(rows)} matching records")
+        
+        # Keep browser open to see results
+        page.wait_for_timeout(10000)
+        
+        browser.close()
+
+def tmp10():
+    data = json.load(open('D:/projects/Spider2-V/evaluation_examples/test_abstract.json', 'r', encoding='utf-8'))
+    count = 0
+    for domain, lines in data.items():
+        if domain not in ['dbt', 'bigquery']:
+            count += len(lines)
+    print(count)
 
 if __name__ == '__main__':
-    i = input('really want to run this? (y/n)')
-    if i == 'y':
-        tmp8()
+    tmp10()
