@@ -535,7 +535,7 @@ class SetupController:
                             command=["xrandr", "--output", display_name, "--mode", resolution],
                             shell=False
                         )
-                        logger.info("✓ Resolution set successfully using xrandr")
+                        logger.info("Resolution set successfully using xrandr")
                         return True
                     else:
                         # Need to create the mode first
@@ -573,7 +573,7 @@ class SetupController:
                                     shell=False
                                 )
 
-                                logger.info("✓ Resolution set successfully using xrandr with custom mode")
+                                logger.info("Resolution set successfully using xrandr with custom mode")
                                 return True
 
                 if method == "xrandr":
@@ -600,7 +600,7 @@ class SetupController:
                     shell=False
                 )
 
-                logger.info("✓ Resolution set successfully using GNOME settings")
+                logger.info("Resolution set successfully using GNOME settings")
                 return True
 
             except Exception as e:

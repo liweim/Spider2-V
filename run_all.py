@@ -23,8 +23,8 @@ def run():
         help="Path to VM file",
     )
     parser.add_argument("--snapshot_name", type=str, default="init_state")
-    parser.add_argument("--screen_width", type=int, default=1920)
-    parser.add_argument("--screen_height", type=int, default=1080)
+    parser.add_argument("--screen_width", type=int, default=1280)
+    parser.add_argument("--screen_height", type=int, default=720)
     parser.add_argument("--sleep_after_execution", type=float, default=0.5)
     parser.add_argument(
         "--client_password", type=str, default="password", help="VM client password"
@@ -56,6 +56,8 @@ def run():
         default="computer-use-preview",
         help="Model for Operator agent",
     )
+    parser.add_argument("--summarizer_model", type=str, default="gpt-5-mini",
+                       help="Model for auxiliary tasks (summarize, evaluate, extract lessons, etc.)")
     parser.add_argument(
         "--max_steps", type=int, default=15, help="Maximum steps for Coordinator"
     )
@@ -66,7 +68,6 @@ def run():
     )
     parser.add_argument("--orchestrator_model", type=str, default="o3-2025-04-16")
     parser.add_argument("--coding_model", type=str, default="o4-mini-2025-04-16")
-    parser.add_argument("--summarizer_model", type=str, default="o4-mini-2025-04-16")
     parser.add_argument("--cua_model", type=str, default="computer-use-preview")
     parser.add_argument("--orchestrator_max_steps", type=int, default=15)
     parser.add_argument("--coding_max_steps", type=int, default=20)
@@ -133,6 +134,7 @@ def run():
 
     # lm config
     parser.add_argument("--model", type=str, default="gpt-4o")
+    parser.add_argument("--judge_model", type=str, default="gpt-4o")
     parser.add_argument("--temperature", type=float, default=1)
     parser.add_argument("--top_p", type=float, default=0.9)
     parser.add_argument("--max_tokens", type=int, default=1500)
@@ -178,13 +180,13 @@ def run():
     parser.add_argument(
         "--grounding_width",
         type=int,
-        default=1920,
+        default=1280,
         help="Width of screenshot image after processor rescaling",
     )
     parser.add_argument(
         "--grounding_height",
         type=int,
-        default=1080,
+        default=720,
         help="Height of screenshot image after processor rescaling",
     )
 
@@ -199,8 +201,7 @@ def run():
     )
     parser.add_argument("--kb_name", default="kb_s2", type=str, help="Knowledge base name for Agent S2")
 
-    parser.add_argument("--max_retries", type=int, default=1,
-                       help="Maximum retries on failure")
+    parser.add_argument("--enable_experience", action="store_true", help="Enable experience")
 
     args = parser.parse_args()
 
@@ -237,29 +238,20 @@ def run():
     args.env = env
 
     if args.method == "langgraph_agent":
-        from run_langgraph_agent import run_langgraph_agent
-
-        run_langgraph_agent(args)
-
+        from run_langgraph_agent import run
     elif args.method == "coact":
-        from run_coact import run_coact
-
-        run_coact(args)
-
+        from run_coact import run
     elif args.method == "agents3":
-        from run_agents3 import run_agents3
-
-        run_agents3(args)
-    
+        from run_agents3 import run
     elif args.method == "agents2":
-        from run_agents2 import run_agents2
-
-        run_agents2(args)
-
+        from run_agents2 import run
     elif args.method == "tool_agent":
-        from run_tool_agent import run_tool_agent
-
-        run_tool_agent(args)
+        from run_tool_agent import run
+    elif args.method == "gta1":
+        from run_gta1_agent import run
+    else:
+        raise ValueError(f"Invalid method: {args.method}")
+    run(args)
 
 if __name__ == "__main__":
     run()

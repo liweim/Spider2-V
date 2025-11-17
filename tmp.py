@@ -201,22 +201,6 @@ def tmp7():
             shutil.copy(exe_path, new_exe_path)
             shutil.copy(result_path, new_result_path)
 
-def tmp8():
-    result_name = 'langgraph_gpt5_cua_50_summarize_rag'
-    result_path = 'D:/projects/GUIAgent/human_result.xlsx'
-    df = pd.read_excel(result_path)
-    config = json.load(open('evaluation_examples/test_small.json', 'r', encoding='utf-8'))
-    res = []
-    for domain, lines in config.items():
-        for line in lines:
-            path = f'results/{result_name}/{domain}/{line}/result.txt'
-            if os.path.exists(path):
-                res.append(eval(open(path, 'r', encoding='utf-8').read()))
-            else:
-                res.append(0)
-    df[result_name] = res
-    df.to_excel(result_path, index=False)
-
 def tmp9():
     from playwright.sync_api import sync_playwright
     with sync_playwright() as p:
@@ -307,5 +291,20 @@ def tmp10():
             count += len(lines)
     print(count)
 
+def tmp11():
+    instructions = []
+    for path in glob.glob("D:/projects/Spider2-V/evaluation_examples/examples/*/*"):
+        id = os.path.split(path)[-1]
+        json_path = f'{path}/{id}.json'
+        if not os.path.exists(json_path):
+            continue
+        data = json.load(open(json_path, 'r', encoding='utf-8'))
+        instruction = data['instruction']
+        instructions.append(instruction)
+    instructions.sort()
+    for instruction in instructions:
+        print(instruction)
+        print('-'*100)
+
 if __name__ == '__main__':
-    tmp10()
+    tmp11()
