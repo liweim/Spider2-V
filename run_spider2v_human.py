@@ -1,6 +1,6 @@
 #coding=utf8
 import json, argparse, random
-import logging, os, sys, datetime
+import logging, os, sys, datetime, time
 from typing import Dict, Any, List, Optional
 from desktop_env.envs.desktop_env import DesktopEnv
 
@@ -71,8 +71,11 @@ def run_human_agent():
                     verbose_instruction = inf.read().strip()
             else: verbose_instruction = None
 
+            # timer for tracking task completion time
+            start_time = None
+
             while True:
-                action = input("\033[31m[Action] Please enter your action number, chosen from:\n1. start recording;\n2. end recording (by default, the original video will be overwritten);\n3. evaluate;\n4. end recording and evaluate (indeed 2+3);\n5. reset VM environment;\n6. show verbose instruction for reference;\n7. switch to the next example.\nYour choice is (Press Ctrl+C to exit): \033[0m")
+                action = input("\033[31m[Action] Please enter your action number, chosen from:\n1. start recording;\n2. end recording (by default, the original video will be overwritten);\n3. evaluate;\n4. end recording and evaluate (indeed 2+3);\n5. reset VM environment;\n6. show verbose instruction for reference;\n7. switch to the next example;\n8. start timer.\nYour choice is (Press Ctrl+C to exit): \033[0m")
 
                 if action.strip() in ['1', 'start']: # start recoding and timing
                     env.controller.start_recording()
@@ -80,13 +83,21 @@ def run_human_agent():
                     env.controller.end_recording(recording_file)
                     logger.info(f'Recording saved to {recording_file}')
                 elif action.strip() in ['3', 'evaluate']:
+                    end_time = time.time()
                     score = env.evaluate()
                     logger.info(f"Evaluation score: {score}")
+                    if start_time is not None:
+                        elapsed_time = end_time - start_time
+                        logger.info(f"Time elapsed: {elapsed_time:.2f} seconds ({elapsed_time/60:.2f} minutes)")
                 elif action.strip() in ['4']:
+                    end_time = time.time()
                     env.controller.end_recording(recording_file)
                     logger.info(f'Recording saved to {recording_file}')
                     score = env.evaluate()
                     logger.info(f"Evaluation score: {score}")
+                    if start_time is not None:
+                        elapsed_time = end_time - start_time
+                        logger.info(f"Time elapsed: {elapsed_time:.2f} seconds ({elapsed_time/60:.2f} minutes)")
                 elif action.strip() in ['5', 'reset']: # reset the environment
                     env.reset(task_config=example)
                     logger.info(f'\x1b[32m[Task instruction for {example["snapshot"]}/{example["id"]}]:\x1b[0m\n\x1b[32m{example["instruction"]}\x1b[0m')
@@ -95,6 +106,9 @@ def run_human_agent():
                 elif action.strip() in ['7', 'next']:
                     logger.info('Switching to the next example ...')
                     break
+                elif action.strip() in ['8', 'timer']:
+                    start_time = time.time()
+                    logger.info('Timer started!')
                 else:
                     logger.error('Unrecognized action. Please try again...')
 
