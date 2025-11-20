@@ -89,16 +89,24 @@ class PythonController:
         payload = json.dumps({"command": command_list, "shell": False})
         headers = {'Content-Type': 'application/json'}
 
-        try:
-            response = requests.post(self.http_server + "/execute", headers=headers, data=payload, timeout=90)
-            if response.status_code == 200:
-                logger.info("Command executed successfully: %s", response.text)
-            else:
-                logger.error("Failed to execute command. Status code: %d", response.status_code)
-            return response.json()
-        except requests.exceptions.RequestException as e:
-            logger.error("An error occurred while trying to execute the command: %s", e)
-            return {"status": "error", "message": e}
+        for attempt in range(self.retry_times):
+            try:
+                response = requests.post(self.http_server + "/execute", headers=headers, data=payload, timeout=90)
+                if response.status_code == 200:
+                    logger.info("Command executed successfully: %s", response.text)
+                    return response.json()
+                else:
+                    logger.error("Failed to execute command. Status code: %d", response.status_code)
+                    return response.json()
+            except requests.exceptions.RequestException as e:
+                logger.error("An error occurred while trying to execute the command (attempt %d/%d): %s",
+                           attempt + 1, self.retry_times, e)
+                if attempt < self.retry_times - 1:
+                    logger.info("Retrying in %d seconds...", self.retry_interval)
+                    time.sleep(self.retry_interval)
+                else:
+                    logger.error("All retry attempts failed")
+                    return {"status": "error", "message": str(e), "output": ""}
     
     def run_python_script(self, script: str, timeout: int = 90) -> Optional[Dict[str, Any]]:
         """
