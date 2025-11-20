@@ -3,6 +3,7 @@ import json, argparse, random
 import logging, os, sys, datetime, time
 from typing import Dict, Any, List, Optional
 from desktop_env.envs.desktop_env import DesktopEnv
+import pandas as pd
 
 
 logger = logging.getLogger()
@@ -38,12 +39,16 @@ def run_human_agent():
     args = parser.parse_args()
     os.makedirs(args.recording, exist_ok=True)
 
-    if not args.example:
-        args.example = os.path.join('evaluation_examples', 'test_one.json')
-        logger.warning(f'[WARNING]: No example provided. Will use {args.example} by default.')
-    with open(args.example, 'r') as infile:
-        examples = json.load(infile)
-    checking_list = [os.path.join('evaluation_examples', 'examples', tool, uid, f'{uid}.json') for tool in examples for uid in examples[tool]]
+    # if not args.example:
+    #     args.example = os.path.join('evaluation_examples', 'test_one.json')
+    #     logger.warning(f'[WARNING]: No example provided. Will use {args.example} by default.')
+    # with open(args.example, 'r') as infile:
+    #     examples = json.load(infile)
+    # checking_list = [os.path.join('evaluation_examples', 'examples', tool, uid, f'{uid}.json') for tool in examples for uid in examples[tool]]
+
+    df = pd.read_excel('../GUIAgent/result_human.xlsx')
+    ids = df[pd.isna(df['score'])][['domain', 'id']].values
+    checking_list = [os.path.join('evaluation_examples', 'examples', domain, id, f'{id}.json') for domain, id in ids]
 
     env = DesktopEnv(
         path_to_vm=args.path_to_vm,
@@ -88,7 +93,7 @@ def run_human_agent():
                     logger.info(f"Evaluation score: {score}")
                     if start_time is not None:
                         elapsed_time = end_time - start_time
-                        logger.info(f"Time elapsed: {elapsed_time:.2f} seconds ({elapsed_time/60:.2f} minutes)")
+                        logger.info(f"Time elapsed: {elapsed_time:.2f} seconds")
                 elif action.strip() in ['4']:
                     end_time = time.time()
                     env.controller.end_recording(recording_file)
@@ -97,12 +102,15 @@ def run_human_agent():
                     logger.info(f"Evaluation score: {score}")
                     if start_time is not None:
                         elapsed_time = end_time - start_time
-                        logger.info(f"Time elapsed: {elapsed_time:.2f} seconds ({elapsed_time/60:.2f} minutes)")
+                        logger.info(f"Time elapsed: {elapsed_time:.2f} seconds")
                 elif action.strip() in ['5', 'reset']: # reset the environment
                     env.reset(task_config=example)
                     logger.info(f'\x1b[32m[Task instruction for {example["snapshot"]}/{example["id"]}]:\x1b[0m\n\x1b[32m{example["instruction"]}\x1b[0m')
                 elif action.strip() in ['6', 'verbose']:
                     logger.info(f'Verbose instruciton is: {verbose_instruction if verbose_instruction else "Not found."}')
+                    if start_time is not None:
+                        elapsed_time = time.time() - start_time
+                        logger.info(f"Time elapsed: {elapsed_time:.2f} seconds")
                 elif action.strip() in ['7', 'next']:
                     logger.info('Switching to the next example ...')
                     break
