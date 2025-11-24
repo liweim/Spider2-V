@@ -7,6 +7,7 @@ import os
 from desktop_env.envs.desktop_env import DesktopEnv
 import time
 import pandas as pd
+import random
 
 def tmp1():
     for path in glob.glob('results/som_gpt_4o_rag_ef_15_verbose/*/*/execution_log.json'):
@@ -306,5 +307,15 @@ def tmp11():
         print(instruction)
         print('-'*100)
 
+def tmp12():
+    data = json.load(open('D:/projects/Spider2-V/evaluation_examples/select.json', 'r', encoding='utf-8'))
+    test_abstract_small = json.load(open('D:/projects/Spider2-V/evaluation_examples/select_small.json', 'r', encoding='utf-8'))
+    for domain, lines in data.items():
+        for line in lines:
+            if random.random() < 0.2 and line not in test_abstract_small[domain]:
+                test_abstract_small[domain].append(line)
+    json.dump(test_abstract_small, open('D:/projects/Spider2-V/evaluation_examples/select_medium.json', 'w', encoding='utf-8'), indent=4)
+    print(sum(len(lines) for lines in test_abstract_small.values()))
+
 if __name__ == '__main__':
-    tmp11()
+    tmp12()

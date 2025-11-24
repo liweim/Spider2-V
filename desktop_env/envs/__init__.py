@@ -112,7 +112,7 @@ class VirtualMachineManager:
                     if vm_name + ".vmx" in vm_path:
                         flag = False
                 if flag:
-                    shutil.rmtree(os.path.join(vms_dir, vm_name))
+                    pass  # Disabled: auto-reinstall was causing issues
 
     def list_vms(self):
         with self.lock:  # Lock when reading the registry

@@ -7,6 +7,7 @@ mm_agents/coact/OAI_CONFIG_LIST
 logs
 kb_s2
 kb_s1
+.claude
 experiences
 
 # Model checkpoints

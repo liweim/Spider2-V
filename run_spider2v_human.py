@@ -47,7 +47,7 @@ def run_human_agent():
     # checking_list = [os.path.join('evaluation_examples', 'examples', tool, uid, f'{uid}.json') for tool in examples for uid in examples[tool]]
 
     df = pd.read_excel('../GUIAgent/result_human.xlsx')
-    ids = df[pd.isna(df['score'])][['domain', 'id']].values
+    ids = df[(pd.isna(df['score'])) & (df['domain'] == 'servicenow')][['domain', 'id']].values
     checking_list = [os.path.join('evaluation_examples', 'examples', domain, id, f'{id}.json') for domain, id in ids]
 
     env = DesktopEnv(
