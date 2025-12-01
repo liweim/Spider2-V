@@ -123,6 +123,23 @@ document.addEventListener("visibilitychange", () => {
         window.browsergym_page_activated();
     }
 }, {capture: true});
+
+// Session keep-alive: send a lightweight request every 5 minutes to prevent ServiceNow session timeout
+setInterval(() => {
+    if (window.location.hostname.includes('service-now.com')) {
+        // Trigger a lightweight API call to keep session alive
+        fetch('/api/now/table/sys_user?sysparm_limit=1', {
+            method: 'GET',
+            credentials: 'include',
+            headers: {
+                'Accept': 'application/json',
+                'X-UserToken': 'keep-alive'
+            }
+        }).catch(err => {
+            console.log('Session keep-alive ping failed:', err);
+        });
+    }
+}, 5 * 60 * 1000); // Every 5 minutes
 """
         )
 

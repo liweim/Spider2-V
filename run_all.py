@@ -9,7 +9,7 @@ def run():
 
     # General config
     parser.add_argument(
-        "--method", type=str, default="langgraph_agent", help="Method to use"
+        "--method", type=str, default="tool_agent", help="Method to use"
     )
 
     # Environment config
@@ -203,6 +203,11 @@ def run():
 
     parser.add_argument("--enable_experience", action="store_true", help="Enable experience")
 
+    parser.add_argument("--crop_roi", action="store_true",
+                       help="Crop images to change ROI before evaluation (reduces token usage)")
+    parser.add_argument("--roi_margin", type=int, default=50,
+                       help="Margin around ROI when cropping (default: 50)")
+
     args = parser.parse_args()
 
     if not os.path.exists(args.path_to_vm):
@@ -237,8 +242,8 @@ def run():
             )
     args.env = env
 
-    if args.method == "langgraph_agent":
-        from run_langgraph_agent import run
+    if args.method == "spider2v_agent":
+        from run_spider2v_agent import run
     elif args.method == "coact":
         from run_coact import run
     elif args.method == "agents3":

@@ -8,6 +8,7 @@ from desktop_env.envs.desktop_env import DesktopEnv
 import time
 import pandas as pd
 import random
+import numpy as np
 
 def tmp1():
     for path in glob.glob('results/som_gpt_4o_rag_ef_15_verbose/*/*/execution_log.json'):
