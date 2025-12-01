@@ -65,8 +65,8 @@ groq
 llama_index
 llama-index-embeddings-huggingface
 
-# pydantic>=2.0,<3.0
-pydantic
+pydantic>=2.0,<3.0
+# pydantic
 pydantic_core
 openai
 diskcache
@@ -77,3 +77,8 @@ ag2
 json_repair
 qwen-vl-utils==0.0.8
 transformers==4.52.3
+termcolor
+docker
+diskcache
+autogen
+plotnine
