@@ -405,3 +405,67 @@ class DesktopEnv(gym.Env):
 
     def close(self):
         _execute_command(["vmrun", "stop", self.path_to_vm])
+
+    def clean_lock(self, vmdir):
+        """Clean VMware lock files to resolve multiprocessing lock issues"""
+        import platform
+        import shutil
+        
+        try:
+            # Try to terminate remaining VMware processes
+            if platform.system() == 'Windows':
+                # Force terminate VMware processes on Windows
+                subprocess.run(['taskkill', '/F', '/IM', 'vmware.exe', '/T'], 
+                              stdout=subprocess.DEVNULL, 
+                              stderr=subprocess.DEVNULL)
+                subprocess.run(['taskkill', '/F', '/IM', 'vmware-vmx.exe', '/T'], 
+                              stdout=subprocess.DEVNULL, 
+                              stderr=subprocess.DEVNULL)
+            elif platform.system() == 'Linux' or platform.system() == 'Darwin':
+                # Force terminate VMware processes on Linux/macOS
+                subprocess.run(['pkill', '-f', 'vmware'], 
+                              stdout=subprocess.DEVNULL, 
+                              stderr=subprocess.DEVNULL)
+                subprocess.run(['pkill', '-f', 'vmware-vmx'], 
+                              stdout=subprocess.DEVNULL, 
+                              stderr=subprocess.DEVNULL)
+            
+            # Find and delete lock files
+            if os.path.exists(vmdir):
+                for root, dirs, files in os.walk(vmdir):
+                    for item in dirs + files:
+                        if item.endswith('.lck'):
+                            full_path = os.path.join(root, item)
+                            try:
+                                if os.path.isdir(full_path):
+                                    shutil.rmtree(full_path)
+                                else:
+                                    os.remove(full_path)
+                                logger.info(f"Cleaned lock file: {full_path}")
+                            except Exception as e:
+                                logger.warning(f"Failed to clean lock file: {full_path}, error: {str(e)}")
+            
+            # Check and update .vmware_vms file, ensure all VMs are marked as free
+            registry_path = '.vmware_vms'
+            if os.path.exists(registry_path):
+                try:
+                    with open(registry_path, 'r') as file:
+                        lines = file.readlines()
+                    
+                    new_lines = []
+                    for line in lines:
+                        if 'occupied' in line:
+                            # Replace 'occupied' with 'free'
+                            new_line = line.replace('occupied', 'free')
+                            new_lines.append(new_line)
+                        else:
+                            new_lines.append(line)
+                    
+                    with open(registry_path, 'w') as file:
+                        file.writelines(new_lines)
+                    logger.info("Updated .vmware_vms registry file")
+                except Exception as e:
+                    logger.warning(f"Failed to update .vmware_vms file: {str(e)}")
+                    
+        except Exception as e:
+            logger.error(f"Error during lock cleanup: {str(e)}")

@@ -7,8 +7,6 @@ python run_langgraph_agent.py --result_dir results/langgraph_gpt5_cua_50_summari
 #复现过程
 打开虚拟机改里面的内容，更新代码：/home/user/server/main.py，保存快照，确保分辨率为1920x1080
 sudo systemctl restart osworld_server@:0.service
-pip install playwright
-playwright install
 
 ## servicenow
 pip install browsergym-workarena==0.2.1 #版本改了就验证对不上了
