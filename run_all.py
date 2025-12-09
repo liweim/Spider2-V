@@ -847,6 +847,8 @@ def run():
                        help="Crop images to change ROI before evaluation (reduces token usage)")
     parser.add_argument("--roi_margin", type=int, default=50,
                        help="Margin around ROI when cropping (default: 50)")
+    parser.add_argument("--consolidate_period", type=int, default=5,
+                       help="Period to consolidate (default: 5)")
 
     args = parser.parse_args()
 

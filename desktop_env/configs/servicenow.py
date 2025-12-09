@@ -18,6 +18,8 @@ from browsergym.core.constants import BROWSERGYM_ID_ATTRIBUTE
 from browsergym.core import _get_global_playwright, _set_global_playwright
 from desktop_env.configs.general import get_browser
 from browsergym.workarena import ALL_WORKARENA_TASKS
+import nest_asyncio
+import time
 
 
 logger = logging.getLogger("desktopenv.setup")
@@ -239,25 +241,57 @@ def workarena_task_init_setup(controller, **config):
         task_name(str): the name of the task to initialize
         task_kwargs(dict): the keyword arguments to pass to the task
     """
+    
+    # <--- Fix 1: Apply the patch to allow Sync Playwright API inside the asyncio loop
+    # This prevents the "Sync API inside asyncio loop" crash.
+    nest_asyncio.apply() 
+    
     listening_port = config.get('listening_port', 9222)
     remote_debugging_url = f"http://{controller.vm_ip}:{listening_port}"
 
     global WORKARENA_ENV
-    if WORKARENA_ENV is not None:
+    
+    # <--- Fix 2: Add retry logic to handle potential TimeoutError (30000ms)
+    # Network lags often cause the initial load to fail; retrying helps stabilize it.
+    max_retries = 3
+    for attempt in range(max_retries):
         try:
-            WORKARENA_ENV.close()
-        except: pass
-    instance = ServiceNowEnv(config['task_name'], cdp_url=remote_debugging_url, **config.get('task_kwargs', {}))
-    instance.reset(seed=999) # random seed is fixed for selecting examples, donot modify this line
-    WORKARENA_ENV = instance
+            # Clean up the previous environment instance if it exists
+            if WORKARENA_ENV is not None:
+                try:
+                    WORKARENA_ENV.close()
+                except: pass
+                
+            # Create a new environment instance
+            instance = ServiceNowEnv(config['task_name'], cdp_url=remote_debugging_url, **config.get('task_kwargs', {}))
+            
+            # Attempt to reset (This is where Timeouts usually occur)
+            print(f"[Attempt {attempt+1}/{max_retries}] Initializing ServiceNow task...")
+            instance.reset(seed=999) # random seed is fixed for selecting examples, donot modify this line
+            
+            # If successful, update the global variable and exit the retry loop
+            WORKARENA_ENV = instance
+            break
+            
+        except Exception as e:
+            print(f"[Warning] Setup failed on attempt {attempt+1}: {e}")
+            # If this was the last attempt, raise the exception to stop the program
+            if attempt == max_retries - 1:
+                raise e
+            # Otherwise, wait briefly before retrying
+            time.sleep(5)
 
-    # remove the "Enable Analytics" dialog if it appears
+    # Remove the "Enable Analytics" dialog if it appears
     try:
         page = instance.page
+        # Optional: Add a short wait to ensure the modal has time to attach to the DOM
+        page.wait_for_selector('div[role="document"][class="now-modal-dialog"]', state='attached', timeout=5000)
+        
         button = page.locator('div[role="document"][class="now-modal-dialog"] div[class="now-modal-footer"] button').filter(has_text="No")
         expect(button).to_be_enabled()
         button.click()
     except Exception as e:
+        # It is normal to pass if the dialog does not appear
         pass
     return
 
