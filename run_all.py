@@ -849,6 +849,13 @@ def run():
                        help="Margin around ROI when cropping (default: 50)")
     parser.add_argument("--consolidate_period", type=int, default=5,
                        help="Period to consolidate (default: 5)")
+    parser.add_argument("--bash_timeout", type=int, default=60,
+                       help="Timeout for bash script execution in seconds (default: 300)")
+    parser.add_argument("--wo_episodic", action="store_true",
+                       help="Skip episodic encoding and use full conversation history")
+    parser.add_argument("--schema_dir", type=str, default="D:/projects/qdrant/qdrant_storage", help="Qdrant storage directory")
+    parser.add_argument("--use_qdrant_server", action="store_true", help="Use Qdrant server, otherwise use local file storage")
+    parser.add_argument("--qdrant_server_url", type=str, default="http://localhost:6333", help="Qdrant server URL")
 
     args = parser.parse_args()
 
