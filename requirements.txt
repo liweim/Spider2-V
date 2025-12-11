@@ -31,7 +31,7 @@ scikit-image
 librosa
 pymupdf
 chardet
-playwright
+playwright==1.44.0
 backoff
 formulas
 pydrive==1.3.1
