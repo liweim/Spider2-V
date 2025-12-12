@@ -173,9 +173,26 @@ def _update_vm(vmx_path, target_vm_name):
         updated_content = re.sub(r'displayName = ".*?"', f'displayName = "{target_vm_name}"', original_content)
         updated_content = re.sub(r'uuid.bios = ".*?"', f'uuid.bios = "{new_uuid_bios}"', updated_content)
         updated_content = re.sub(r'uuid.location = ".*?"', f'uuid.location = "{new_uuid_location}"', updated_content)
+        
+        # Update all MAC address related settings to avoid conflicts
         updated_content = re.sub(r'ethernet0.generatedAddress = ".*?"',
                                  f'ethernet0.generatedAddress = "{new_mac_address}"',
                                  updated_content)
+        # Also update static address if present
+        updated_content = re.sub(r'ethernet0.address = ".*?"',
+                                 f'ethernet0.address = "{new_mac_address}"',
+                                 updated_content)
+        # Ensure addressType is set to "generated" to use the new MAC
+        if 'ethernet0.addressType' not in updated_content:
+            # Add addressType if not present
+            updated_content = re.sub(r'(ethernet0\.generatedAddress = ".*?")',
+                                   r'\1\nethernet0.addressType = "generated"',
+                                   updated_content)
+        else:
+            updated_content = re.sub(r'ethernet0.addressType = ".*?"',
+                                   'ethernet0.addressType = "generated"',
+                                   updated_content)
+        
         updated_content = re.sub(r'vmci0.id = ".*?"', f'vmci0.id = "{new_vmci_id}"', updated_content)
 
         # Write the updated content back to the file

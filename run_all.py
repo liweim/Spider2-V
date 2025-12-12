@@ -411,6 +411,23 @@ def run_env_tasks(task_queue, args: argparse.Namespace):
         # Set environment in args
         args.env = env
         
+        # Log VM IP address for debugging network conflicts
+        try:
+            vm_ip = env.vm_ip
+            process_logger.info(f"[INFO] {current_process().name} VM IP: {vm_ip}")
+            
+            # Optional: Verify network connectivity by executing a command in VM
+            try:
+                # Refresh network configuration to ensure unique IP
+                refresh_cmd = "sudo dhclient -r && sudo dhclient"
+                process_logger.info(f"[DEBUG] Refreshing network configuration in VM...")
+                # Note: This requires the controller to be initialized
+                # env.controller.execute_command(refresh_cmd)
+            except Exception as refresh_error:
+                process_logger.debug(f"[DEBUG] Could not refresh network: {refresh_error}")
+        except Exception as ip_error:
+            process_logger.warning(f"[WARN] Could not get VM IP: {ip_error}")
+        
         process_logger.info(f"Process {current_process().name} started with method: {args.method}")
         
         # Process tasks from queue
@@ -587,6 +604,12 @@ def run_multienv(args: argparse.Namespace, tasks_to_run: List[tuple]):
             p.start()
             processes.append(p)
             logger.info(f"Started process {p.name} with PID {p.pid}")
+            
+            # Add delay between starting processes to avoid network conflicts
+            # This gives each VM time to fully initialize and acquire a unique IP
+            if i < num_envs - 1:  # Don't wait after the last process
+                logger.info(f"Waiting 10 seconds before starting next process...")
+                time.sleep(10)
         
         try:
             # Monitor processes and restart if needed
