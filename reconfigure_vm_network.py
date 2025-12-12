@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
 """
-Reconfigure VM network settings to ensure unique MAC address and avoid IP conflicts.
+Reconfigure and rename copied VM to ensure unique MAC address and avoid IP conflicts.
 
 Usage:
-    # Reconfigure a single VM
-    python reconfigure_vm_network.py --vm_path ./vm_data/Ubuntu2/Ubuntu2/Ubuntu2.vmx
+    # Clone VM: copy Ubuntu0 to create Ubuntu1
+    python reconfigure_vm_network.py --source Ubuntu0 --target Ubuntu1
     
-    # Reconfigure all VMs in vm_data directory
-    python reconfigure_vm_network.py --all
+    # Clone with custom vm_data directory
+    python reconfigure_vm_network.py --source Ubuntu0 --target Ubuntu2 --vm_data_dir ./vm_data
+    
+    # Just reconfigure existing VM without renaming
+    python reconfigure_vm_network.py --vm_path ./vm_data/Ubuntu1/Ubuntu1/Ubuntu1.vmx
     
     # Dry run (show what would be changed without actually changing)
-    python reconfigure_vm_network.py --vm_path ./vm_data/Ubuntu2/Ubuntu2/Ubuntu2.vmx --dry-run
+    python reconfigure_vm_network.py --source Ubuntu0 --target Ubuntu1 --dry-run
 """
 
 import os
@@ -82,13 +85,123 @@ def read_current_config(vmx_path):
     return config, content
 
 
-def update_vmx_network(vmx_path, dry_run=False):
+def rename_vm_files(source_vm_dir, target_vm_name, dry_run=False):
+    """
+    Rename all VM files from source name to target name.
+    
+    Args:
+        source_vm_dir: Directory containing VM files (e.g., vm_data/Ubuntu0/Ubuntu0)
+        target_vm_name: New VM name (e.g., Ubuntu1)
+        dry_run: If True, only show what would be changed
+        
+    Returns:
+        Path to the new .vmx file
+    """
+    source_vm_name = os.path.basename(source_vm_dir)
+    
+    # Files to rename (common VMware file extensions)
+    extensions = ['vmx', 'vmxf', 'nvram', 'vmsd', 'vmdk', 'vmdk.lck']
+    
+    renamed_files = []
+    
+    for ext in extensions:
+        source_file = os.path.join(source_vm_dir, f"{source_vm_name}.{ext}")
+        target_file = os.path.join(source_vm_dir, f"{target_vm_name}.{ext}")
+        
+        if os.path.exists(source_file):
+            if not dry_run:
+                os.rename(source_file, target_file)
+            renamed_files.append((source_file, target_file))
+            print(f"  [RENAME] {source_vm_name}.{ext} -> {target_vm_name}.{ext}")
+    
+    # Handle .vmdk flat files (e.g., Ubuntu0-flat.vmdk)
+    for file in os.listdir(source_vm_dir):
+        if file.startswith(source_vm_name) and '-flat.vmdk' in file:
+            source_file = os.path.join(source_vm_dir, file)
+            target_file_name = file.replace(source_vm_name, target_vm_name)
+            target_file = os.path.join(source_vm_dir, target_file_name)
+            if not dry_run:
+                os.rename(source_file, target_file)
+            renamed_files.append((source_file, target_file))
+            print(f"  [RENAME] {file} -> {target_file_name}")
+    
+    new_vmx_path = os.path.join(source_vm_dir, f"{target_vm_name}.vmx")
+    return new_vmx_path
+
+
+def clone_and_reconfigure_vm(source_vm_name, target_vm_name, vm_data_dir="./vm_data", dry_run=False):
+    """
+    Clone a VM and reconfigure it with unique network settings.
+    
+    Args:
+        source_vm_name: Source VM name (e.g., Ubuntu0)
+        target_vm_name: Target VM name (e.g., Ubuntu1)
+        vm_data_dir: VM data directory
+        dry_run: If True, only show what would be changed
+        
+    Returns:
+        Path to the new .vmx file
+    """
+    # Construct paths
+    source_vm_dir = os.path.join(vm_data_dir, source_vm_name, source_vm_name)
+    source_vmx = os.path.join(source_vm_dir, f"{source_vm_name}.vmx")
+    
+    target_outer_dir = os.path.join(vm_data_dir, target_vm_name)
+    target_inner_dir = os.path.join(target_outer_dir, target_vm_name)
+    
+    # Check if source exists
+    if not os.path.exists(source_vmx):
+        raise FileNotFoundError(f"Source VM not found: {source_vmx}")
+    
+    # Check if target already exists
+    if os.path.exists(target_outer_dir):
+        raise FileExistsError(f"Target VM already exists: {target_outer_dir}")
+    
+    print(f"\n{'='*80}")
+    print(f"Cloning VM: {source_vm_name} -> {target_vm_name}")
+    print(f"{'='*80}\n")
+    
+    if not dry_run:
+        # Copy the entire VM directory structure
+        print(f"[COPY] Copying VM directory...")
+        shutil.copytree(os.path.join(vm_data_dir, source_vm_name), target_outer_dir)
+        print(f"  [SUCCESS] Copied to: {target_outer_dir}")
+    else:
+        print(f"[DRY-RUN] Would copy: {os.path.join(vm_data_dir, source_vm_name)} -> {target_outer_dir}")
+        # For dry-run, we can't proceed with actual file operations
+        print(f"\n[INFO] In actual run, would:")
+        print(f"  1. Copy {source_vm_name} to {target_vm_name}")
+        print(f"  2. Rename all files from {source_vm_name}.* to {target_vm_name}.*")
+        print(f"  3. Update displayName in VMX file")
+        print(f"  4. Generate new MAC address, UUIDs, and VMCI ID")
+        return None
+    
+    # Rename files
+    print(f"\n[RENAME] Renaming VM files...")
+    new_vmx_path = rename_vm_files(target_inner_dir, target_vm_name, dry_run=dry_run)
+    
+    # Update VMX file: displayName and network config
+    print(f"\n[CONFIG] Updating VM configuration...")
+    old_config, new_config = update_vmx_network(new_vmx_path, dry_run=dry_run, new_vm_name=target_vm_name)
+    
+    print(f"\n{'='*80}")
+    print(f"[SUCCESS] VM cloned and configured!")
+    print(f"{'='*80}")
+    print(f"  Source: {source_vmx}")
+    print(f"  Target: {new_vmx_path}")
+    print(f"  New MAC: {new_config['generated_mac']}")
+    
+    return new_vmx_path
+
+
+def update_vmx_network(vmx_path, dry_run=False, new_vm_name=None):
     """
     Update VMX file network configuration to ensure unique MAC address.
     
     Args:
         vmx_path: Path to .vmx file
         dry_run: If True, only show what would be changed
+        new_vm_name: New VM name to update displayName (optional)
         
     Returns:
         dict with old and new values
@@ -107,6 +220,14 @@ def update_vmx_network(vmx_path, dry_run=False):
     
     # Prepare updated content
     updated_content = content
+    
+    # Update displayName if new_vm_name is provided
+    if new_vm_name:
+        updated_content = re.sub(
+            r'displayName\s*=\s*"[^"]+"',
+            f'displayName = "{new_vm_name}"',
+            updated_content
+        )
     
     # Update MAC addresses
     if old_config['generated_mac']:
@@ -257,18 +378,46 @@ def print_config_comparison(vm_name, old_config, new_config):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Reconfigure VM network to avoid IP conflicts"
+        description="Clone/reconfigure VM to avoid IP conflicts",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Clone Ubuntu0 to create Ubuntu1 (recommended)
+  python reconfigure_vm_network.py --source Ubuntu0 --target Ubuntu1
+  
+  # Clone with dry-run
+  python reconfigure_vm_network.py --source Ubuntu0 --target Ubuntu2 --dry-run
+  
+  # Just reconfigure existing VM
+  python reconfigure_vm_network.py --vm_path ./vm_data/Ubuntu1/Ubuntu1/Ubuntu1.vmx
+"""
     )
+    
+    # Clone mode arguments
+    parser.add_argument(
+        "--source",
+        type=str,
+        help="Source VM name to clone (e.g., Ubuntu0)"
+    )
+    parser.add_argument(
+        "--target",
+        type=str,
+        help="Target VM name for the clone (e.g., Ubuntu1)"
+    )
+    
+    # Reconfigure mode arguments
     parser.add_argument(
         "--vm_path",
         type=str,
-        help="Path to VM .vmx file to reconfigure"
+        help="Path to VM .vmx file to reconfigure (alternative to --source/--target)"
     )
     parser.add_argument(
         "--all",
         action="store_true",
         help="Reconfigure all VMs in vm_data directory"
     )
+    
+    # Common arguments
     parser.add_argument(
         "--vm_data_dir",
         type=str,
@@ -283,62 +432,108 @@ def main():
     
     args = parser.parse_args()
     
-    if not args.vm_path and not args.all:
-        parser.error("Either --vm_path or --all must be specified")
+    # Validate arguments
+    mode_clone = args.source and args.target
+    mode_reconfig = args.vm_path or args.all
     
-    print("VM Network Reconfiguration Tool")
+    if not mode_clone and not mode_reconfig:
+        parser.error("Must specify either --source/--target OR --vm_path/--all")
+    
+    if mode_clone and mode_reconfig:
+        parser.error("Cannot use --source/--target with --vm_path/--all")
+    
+    if args.source and not args.target:
+        parser.error("--target is required when using --source")
+    
+    if args.target and not args.source:
+        parser.error("--source is required when using --target")
+    
+    print("VM Network Configuration Tool")
     print("=" * 80)
     
     if args.dry_run:
         print("[MODE] DRY RUN - No changes will be made")
         print()
     
-    vms_to_process = []
-    
-    if args.all:
-        vms_to_process = find_all_vms(args.vm_data_dir)
-        if not vms_to_process:
-            print(f"[ERROR] No VMs found in {args.vm_data_dir}")
-            return 1
-        print(f"[INFO] Found {len(vms_to_process)} VM(s) to reconfigure")
-    else:
-        if not os.path.exists(args.vm_path):
-            print(f"[ERROR] VM not found: {args.vm_path}")
-            return 1
-        vms_to_process = [args.vm_path]
-    
-    success_count = 0
-    error_count = 0
-    
-    for vmx_path in vms_to_process:
-        vm_name = os.path.basename(vmx_path).replace('.vmx', '')
-        
+    # Clone mode
+    if mode_clone:
         try:
-            old_config, new_config = update_vmx_network(vmx_path, dry_run=args.dry_run)
-            print_config_comparison(vm_name, old_config, new_config)
-            success_count += 1
+            new_vmx_path = clone_and_reconfigure_vm(
+                source_vm_name=args.source,
+                target_vm_name=args.target,
+                vm_data_dir=args.vm_data_dir,
+                dry_run=args.dry_run
+            )
+            
+            if not args.dry_run:
+                print("\n" + "=" * 80)
+                print("[NEXT STEPS]")
+                print("=" * 80)
+                print(f"1. Verify MAC address:")
+                print(f"   python check_vm_macs.py")
+                print(f"\n2. Use the new VM:")
+                print(f"   python quickstart.py --vm_index {args.target.replace('Ubuntu', '')}")
+                print(f"   # or")
+                print(f"   python run_all.py --path_to_vm {new_vmx_path}")
+                print(f"\n3. When running, check IP:")
+                print(f"   python check_vm_ips.py")
+            
+            return 0
+            
         except Exception as e:
-            print(f"\n[ERROR] Failed to process {vm_name}: {e}")
-            error_count += 1
+            print(f"\n[ERROR] Failed to clone VM: {e}")
+            import traceback
+            traceback.print_exc()
+            return 1
     
-    print("\n" + "=" * 80)
-    print("SUMMARY")
-    print("=" * 80)
-    print(f"  Total VMs: {len(vms_to_process)}")
-    print(f"  Success: {success_count}")
-    print(f"  Failed: {error_count}")
-    
-    if not args.dry_run and success_count > 0:
-        print("\n[SUCCESS] VM network configuration updated!")
-        print("[INFO] Each VM now has a unique MAC address")
-        print("[INFO] When you start these VMs, they will get unique IP addresses")
-        print("\n[NEXT STEPS]")
-        print("  1. Verify: python check_vm_macs.py")
-        print("  2. Start VMs and check IPs: python check_vm_ips.py")
-    elif args.dry_run:
-        print("\n[INFO] This was a dry run. Use without --dry-run to apply changes.")
-    
-    return 0 if error_count == 0 else 1
+    # Reconfigure mode
+    else:
+        vms_to_process = []
+        
+        if args.all:
+            vms_to_process = find_all_vms(args.vm_data_dir)
+            if not vms_to_process:
+                print(f"[ERROR] No VMs found in {args.vm_data_dir}")
+                return 1
+            print(f"[INFO] Found {len(vms_to_process)} VM(s) to reconfigure")
+        else:
+            if not os.path.exists(args.vm_path):
+                print(f"[ERROR] VM not found: {args.vm_path}")
+                return 1
+            vms_to_process = [args.vm_path]
+        
+        success_count = 0
+        error_count = 0
+        
+        for vmx_path in vms_to_process:
+            vm_name = os.path.basename(vmx_path).replace('.vmx', '')
+            
+            try:
+                old_config, new_config = update_vmx_network(vmx_path, dry_run=args.dry_run)
+                print_config_comparison(vm_name, old_config, new_config)
+                success_count += 1
+            except Exception as e:
+                print(f"\n[ERROR] Failed to process {vm_name}: {e}")
+                error_count += 1
+        
+        print("\n" + "=" * 80)
+        print("SUMMARY")
+        print("=" * 80)
+        print(f"  Total VMs: {len(vms_to_process)}")
+        print(f"  Success: {success_count}")
+        print(f"  Failed: {error_count}")
+        
+        if not args.dry_run and success_count > 0:
+            print("\n[SUCCESS] VM network configuration updated!")
+            print("[INFO] Each VM now has a unique MAC address")
+            print("[INFO] When you start these VMs, they will get unique IP addresses")
+            print("\n[NEXT STEPS]")
+            print("  1. Verify: python check_vm_macs.py")
+            print("  2. Start VMs and check IPs: python check_vm_ips.py")
+        elif args.dry_run:
+            print("\n[INFO] This was a dry run. Use without --dry-run to apply changes.")
+        
+        return 0 if error_count == 0 else 1
 
 
 if __name__ == "__main__":
