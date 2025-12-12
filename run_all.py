@@ -282,8 +282,12 @@ def filter_tasks(args, test_all_meta: dict, logger) -> List[tuple]:
     for domain in test_all_meta:
         for example_id in test_all_meta[domain]:
             target_dir = os.path.join(args.result_dir, domain, example_id)
+            execution_log_path = os.path.join(target_dir, 'execution_log.json')
             result_path = os.path.join(target_dir, 'result.txt')
             err_reason_path = os.path.join(target_dir, 'err_reason.txt')
+            if not os.path.exists(execution_log_path):
+                if os.path.exists(result_path):
+                    os.remove(result_path)
             
             should_skip = False
             if not args.rerun and os.path.exists(result_path) and not os.path.exists(err_reason_path):
