@@ -85,47 +85,58 @@ def read_current_config(vmx_path):
     return config, content
 
 
-def rename_vm_files(source_vm_dir, target_vm_name, dry_run=False):
+def rename_vm_files(vm_dir, source_vm_name, target_vm_name, dry_run=False):
     """
     Rename all VM files from source name to target name.
     
     Args:
-        source_vm_dir: Directory containing VM files (e.g., vm_data/Ubuntu0/Ubuntu0)
+        vm_dir: Directory containing VM files (e.g., vm_data/Ubuntu1/Ubuntu1)
+        source_vm_name: Original VM name (e.g., Ubuntu0)
         target_vm_name: New VM name (e.g., Ubuntu1)
         dry_run: If True, only show what would be changed
         
     Returns:
         Path to the new .vmx file
     """
-    source_vm_name = os.path.basename(source_vm_dir)
     
-    # Files to rename (common VMware file extensions)
-    extensions = ['vmx', 'vmxf', 'nvram', 'vmsd', 'vmdk', 'vmdk.lck']
-    
+    # Rename all files containing the source VM name
     renamed_files = []
     
-    for ext in extensions:
-        source_file = os.path.join(source_vm_dir, f"{source_vm_name}.{ext}")
-        target_file = os.path.join(source_vm_dir, f"{target_vm_name}.{ext}")
+    # Get all files in the directory
+    for file in os.listdir(vm_dir):
+        old_file_path = os.path.join(vm_dir, file)
         
-        if os.path.exists(source_file):
+        # Skip directories
+        if os.path.isdir(old_file_path):
+            continue
+        
+        # Check if filename contains source_vm_name or source_vm_name with dash separator
+        # e.g., Ubuntu0.vmx, Ubuntu0-flat.vmdk, Ubuntu-0.scoreboard, Ubuntu0-Snapshot13.vmem
+        new_file_name = file
+        needs_rename = False
+        
+        # Pattern 1: Ubuntu0 (direct match)
+        if source_vm_name in file:
+            new_file_name = file.replace(source_vm_name, target_vm_name)
+            needs_rename = True
+        # Pattern 2: Ubuntu-0 (with dash, used in some VMware files)
+        elif f"{source_vm_name[:-1]}-{source_vm_name[-1]}" in file:
+            # e.g., Ubuntu0 -> Ubuntu-0
+            source_with_dash = f"{source_vm_name[:-1]}-{source_vm_name[-1]}"
+            target_with_dash = f"{target_vm_name[:-1]}-{target_vm_name[-1]}"
+            new_file_name = file.replace(source_with_dash, target_with_dash)
+            needs_rename = True
+        
+        if needs_rename:
+            new_file_path = os.path.join(vm_dir, new_file_name)
+            
             if not dry_run:
-                os.rename(source_file, target_file)
-            renamed_files.append((source_file, target_file))
-            print(f"  [RENAME] {source_vm_name}.{ext} -> {target_vm_name}.{ext}")
+                os.rename(old_file_path, new_file_path)
+            
+            renamed_files.append((old_file_path, new_file_path))
+            print(f"  [RENAME] {file} -> {new_file_name}")
     
-    # Handle .vmdk flat files (e.g., Ubuntu0-flat.vmdk)
-    for file in os.listdir(source_vm_dir):
-        if file.startswith(source_vm_name) and '-flat.vmdk' in file:
-            source_file = os.path.join(source_vm_dir, file)
-            target_file_name = file.replace(source_vm_name, target_vm_name)
-            target_file = os.path.join(source_vm_dir, target_file_name)
-            if not dry_run:
-                os.rename(source_file, target_file)
-            renamed_files.append((source_file, target_file))
-            print(f"  [RENAME] {file} -> {target_file_name}")
-    
-    new_vmx_path = os.path.join(source_vm_dir, f"{target_vm_name}.vmx")
+    new_vmx_path = os.path.join(vm_dir, f"{target_vm_name}.vmx")
     return new_vmx_path
 
 
@@ -189,7 +200,7 @@ def clone_and_reconfigure_vm(source_vm_name, target_vm_name, vm_data_dir="./vm_d
     
     # Rename files
     print(f"\n[RENAME] Renaming VM files...")
-    new_vmx_path = rename_vm_files(target_inner_dir, target_vm_name, dry_run=dry_run)
+    new_vmx_path = rename_vm_files(target_inner_dir, source_vm_name, target_vm_name, dry_run=dry_run)
     
     # Update VMX file: displayName and network config
     print(f"\n[CONFIG] Updating VM configuration...")
