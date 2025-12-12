@@ -166,14 +166,25 @@ def clone_and_reconfigure_vm(source_vm_name, target_vm_name, vm_data_dir="./vm_d
         print(f"[COPY] Copying VM directory...")
         shutil.copytree(os.path.join(vm_data_dir, source_vm_name), target_outer_dir)
         print(f"  [SUCCESS] Copied to: {target_outer_dir}")
+        
+        # Rename the inner directory from source_vm_name to target_vm_name
+        source_inner_dir = os.path.join(target_outer_dir, source_vm_name)
+        if os.path.exists(source_inner_dir):
+            print(f"\n[RENAME DIR] Renaming inner directory...")
+            os.rename(source_inner_dir, target_inner_dir)
+            print(f"  [SUCCESS] {source_vm_name}/ -> {target_vm_name}/")
+        else:
+            # In case the inner directory structure is different
+            print(f"[WARN] Inner directory not found: {source_inner_dir}")
     else:
         print(f"[DRY-RUN] Would copy: {os.path.join(vm_data_dir, source_vm_name)} -> {target_outer_dir}")
         # For dry-run, we can't proceed with actual file operations
         print(f"\n[INFO] In actual run, would:")
         print(f"  1. Copy {source_vm_name} to {target_vm_name}")
-        print(f"  2. Rename all files from {source_vm_name}.* to {target_vm_name}.*")
-        print(f"  3. Update displayName in VMX file")
-        print(f"  4. Generate new MAC address, UUIDs, and VMCI ID")
+        print(f"  2. Rename inner directory from {source_vm_name}/ to {target_vm_name}/")
+        print(f"  3. Rename all files from {source_vm_name}.* to {target_vm_name}.*")
+        print(f"  4. Update displayName in VMX file")
+        print(f"  5. Generate new MAC address, UUIDs, and VMCI ID")
         return None
     
     # Rename files
