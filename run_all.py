@@ -4,8 +4,13 @@ import sys
 import signal
 import time
 import json
+import re
+import random
+import uuid
+import shutil
+from datetime import datetime
 from multiprocessing import Process, Manager, current_process
-from typing import List
+from typing import List, Dict, Tuple
 
 sys.path.append("../GUIAgent")
 from utils import summary, setup_logger
@@ -20,6 +25,268 @@ logger = None  # Will be initialized in run()
 if os.path.exists(".env"):
     from dotenv import load_dotenv
     load_dotenv()
+
+
+# ==================== MAC Address Conflict Detection ====================
+
+def read_vmx_mac_address(vmx_path: str) -> Dict[str, str]:
+    """
+    Read MAC address configuration from VMX file.
+    
+    Returns:
+        Dictionary with 'generated_mac', 'static_mac', and 'address_type'
+    """
+    if not os.path.exists(vmx_path):
+        return {'generated_mac': None, 'static_mac': None, 'address_type': None}
+    
+    try:
+        with open(vmx_path, 'r', encoding='utf-8', errors='ignore') as f:
+            content = f.read()
+        
+        config = {}
+        
+        # Extract generated MAC address
+        match = re.search(r'ethernet0\.generatedAddress\s*=\s*"([^"]+)"', content)
+        config['generated_mac'] = match.group(1) if match else None
+        
+        # Extract static MAC address
+        match = re.search(r'ethernet0\.address\s*=\s*"([^"]+)"', content)
+        config['static_mac'] = match.group(1) if match else None
+        
+        # Extract address type
+        match = re.search(r'ethernet0\.addressType\s*=\s*"([^"]+)"', content)
+        config['address_type'] = match.group(1) if match else None
+        
+        return config
+    except Exception as e:
+        logger.warning(f"Failed to read MAC from {vmx_path}: {e}")
+        return {'generated_mac': None, 'static_mac': None, 'address_type': None}
+
+
+def find_all_vms(vm_data_dir: str = "./vm_data") -> List[str]:
+    """Find all VM .vmx files in the directory."""
+    vms = []
+    
+    if not os.path.exists(vm_data_dir):
+        return vms
+    
+    for vm_name in os.listdir(vm_data_dir):
+        vm_path = os.path.join(vm_data_dir, vm_name)
+        
+        if not os.path.isdir(vm_path):
+            continue
+        
+        if vm_name.endswith('.zip'):
+            continue
+        
+        # Look for .vmx file
+        vmx_path = os.path.join(vm_path, vm_name, f"{vm_name}.vmx")
+        if os.path.exists(vmx_path):
+            vms.append(vmx_path)
+    
+    return sorted(vms)
+
+
+def generate_mac_address() -> str:
+    """Generate a unique MAC address for VMware VMs."""
+    # VMware MAC address range starts with 00:0c:29
+    mac = [0x00, 0x0c, 0x29,
+           random.randint(0x00, 0x7f),
+           random.randint(0x00, 0xff),
+           random.randint(0x00, 0xff)]
+    return ':'.join(map(lambda x: "%02x" % x, mac))
+
+
+def backup_vmx_file(vmx_path: str) -> str:
+    """Create a backup of the VMX file."""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_path = f"{vmx_path}.backup_{timestamp}"
+    shutil.copy2(vmx_path, backup_path)
+    return backup_path
+
+
+def update_vmx_mac_address(vmx_path: str, new_mac: str) -> bool:
+    """
+    Update VMX file with a new MAC address.
+    
+    Args:
+        vmx_path: Path to .vmx file
+        new_mac: New MAC address to set
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        # Read current content
+        with open(vmx_path, 'r', encoding='utf-8', errors='ignore') as f:
+            content = f.read()
+        
+        # Create backup
+        backup_path = backup_vmx_file(vmx_path)
+        logger.info(f"  Created backup: {backup_path}")
+        
+        # Update MAC addresses
+        updated_content = content
+        
+        # Update generated MAC
+        if re.search(r'ethernet0\.generatedAddress\s*=\s*"[^"]+"', content):
+            updated_content = re.sub(
+                r'ethernet0\.generatedAddress\s*=\s*"[^"]+"',
+                f'ethernet0.generatedAddress = "{new_mac}"',
+                updated_content
+            )
+        else:
+            # Add if not present
+            match = re.search(r'(ethernet0\.[^\n]+\n)', updated_content)
+            if match:
+                insert_pos = match.end()
+                updated_content = (
+                    updated_content[:insert_pos] +
+                    f'ethernet0.generatedAddress = "{new_mac}"\n' +
+                    updated_content[insert_pos:]
+                )
+        
+        # Update static MAC if present
+        if re.search(r'ethernet0\.address\s*=\s*"[^"]+"', content):
+            updated_content = re.sub(
+                r'ethernet0\.address\s*=\s*"[^"]+"',
+                f'ethernet0.address = "{new_mac}"',
+                updated_content
+            )
+        
+        # Ensure addressType is "generated"
+        if re.search(r'ethernet0\.addressType\s*=\s*"[^"]+"', content):
+            updated_content = re.sub(
+                r'ethernet0\.addressType\s*=\s*"[^"]+"',
+                'ethernet0.addressType = "generated"',
+                updated_content
+            )
+        
+        # Generate new UUIDs to ensure uniqueness
+        new_uuid_bios = str(uuid.uuid4())
+        new_uuid_location = str(uuid.uuid4())
+        new_vmci_id = str(random.randint(-2147483648, 2147483647))
+        
+        # Update UUIDs
+        if re.search(r'uuid\.bios\s*=\s*"[^"]+"', content):
+            updated_content = re.sub(
+                r'uuid\.bios\s*=\s*"[^"]+"',
+                f'uuid.bios = "{new_uuid_bios}"',
+                updated_content
+            )
+        
+        if re.search(r'uuid\.location\s*=\s*"[^"]+"', content):
+            updated_content = re.sub(
+                r'uuid\.location\s*=\s*"[^"]+"',
+                f'uuid.location = "{new_uuid_location}"',
+                updated_content
+            )
+        
+        if re.search(r'vmci0\.id\s*=\s*"[^"]+"', content):
+            updated_content = re.sub(
+                r'vmci0\.id\s*=\s*"[^"]+"',
+                f'vmci0.id = "{new_vmci_id}"',
+                updated_content
+            )
+        
+        # Write updated content
+        with open(vmx_path, 'w', encoding='utf-8') as f:
+            f.write(updated_content)
+        
+        return True
+    except Exception as e:
+        logger.error(f"Failed to update MAC address in {vmx_path}: {e}")
+        return False
+
+
+def check_and_fix_mac_conflicts(vm_data_dir: str = "./vm_data") -> Tuple[bool, int]:
+    """
+    Check for MAC address conflicts among all VMs and fix them if found.
+    
+    Args:
+        vm_data_dir: VM data directory
+        
+    Returns:
+        Tuple of (success: bool, conflicts_fixed: int)
+    """
+    logger.info("Checking for MAC address conflicts...")
+    
+    # Find all VMs
+    all_vms = find_all_vms(vm_data_dir)
+    
+    if not all_vms:
+        logger.warning(f"No VMs found in {vm_data_dir}")
+        return True, 0
+    
+    logger.info(f"Found {len(all_vms)} VM(s) to check")
+    
+    # Collect MAC addresses
+    mac_to_vms = {}  # MAC -> list of VM paths
+    vm_to_mac = {}   # VM path -> MAC address
+    
+    for vmx_path in all_vms:
+        vm_name = os.path.basename(vmx_path).replace('.vmx', '')
+        config = read_vmx_mac_address(vmx_path)
+        
+        # Use generated MAC, fallback to static MAC
+        mac = config['generated_mac'] or config['static_mac']
+        
+        if mac:
+            vm_to_mac[vmx_path] = mac
+            if mac not in mac_to_vms:
+                mac_to_vms[mac] = []
+            mac_to_vms[mac].append(vmx_path)
+            logger.debug(f"  {vm_name}: {mac}")
+        else:
+            logger.warning(f"  {vm_name}: No MAC address found")
+    
+    # Find conflicts
+    conflicts = {mac: vms for mac, vms in mac_to_vms.items() if len(vms) > 1}
+    
+    if not conflicts:
+        logger.info("✓ No MAC address conflicts detected")
+        return True, 0
+    
+    # Report conflicts
+    logger.warning(f"✗ Found {len(conflicts)} MAC address conflict(s):")
+    for mac, vms in conflicts.items():
+        logger.warning(f"  MAC {mac} used by:")
+        for vm in vms:
+            vm_name = os.path.basename(vm).replace('.vmx', '')
+            logger.warning(f"    - {vm_name}")
+    
+    # Fix conflicts
+    logger.info("Attempting to fix MAC address conflicts...")
+    conflicts_fixed = 0
+    
+    for mac, vms in conflicts.items():
+        # Keep the first VM with this MAC, regenerate for others
+        for vm_path in vms[1:]:
+            vm_name = os.path.basename(vm_path).replace('.vmx', '')
+            
+            # Generate new unique MAC
+            new_mac = generate_mac_address()
+            # Ensure it's unique
+            while new_mac in mac_to_vms:
+                new_mac = generate_mac_address()
+            
+            logger.info(f"  Updating {vm_name}:")
+            logger.info(f"    Old MAC: {mac}")
+            logger.info(f"    New MAC: {new_mac}")
+            
+            if update_vmx_mac_address(vm_path, new_mac):
+                mac_to_vms[new_mac] = [vm_path]
+                conflicts_fixed += 1
+                logger.info(f"  ✓ Successfully updated {vm_name}")
+            else:
+                logger.error(f"  ✗ Failed to update {vm_name}")
+                return False, conflicts_fixed
+    
+    logger.info(f"✓ Fixed {conflicts_fixed} MAC address conflict(s)")
+    return True, conflicts_fixed
+
+
+# ==================== End of MAC Address Conflict Detection ====================
 
 
 class SimpleVMPool:
@@ -590,6 +857,42 @@ def run_multienv(args: argparse.Namespace, tasks_to_run: List[tuple]):
         logger.warning(f"Failed to prepare VMs: {e}")
         logger.warning("Continuing anyway...")
     
+    # Check and fix MAC address conflicts
+    logger.info("\n" + "="*80)
+    logger.info("Checking MAC address conflicts...")
+    logger.info("="*80)
+    
+    try:
+        # Extract vm_data directory
+        if args.path_to_vm:
+            vm_data_dir = os.path.dirname(os.path.dirname(os.path.dirname(args.path_to_vm)))
+            if not vm_data_dir or not os.path.exists(vm_data_dir):
+                vm_data_dir = "./vm_data"
+        else:
+            vm_data_dir = "./vm_data"
+        
+        success, conflicts_fixed = check_and_fix_mac_conflicts(vm_data_dir)
+        
+        if not success:
+            logger.error("Failed to resolve MAC address conflicts")
+            logger.error("Please fix MAC conflicts manually before running multiprocess mode")
+            logger.error(f"Use: python reconfigure_vm_network.py --all --vm_data_dir {vm_data_dir}")
+            sys.exit(1)
+        
+        if conflicts_fixed > 0:
+            logger.info(f"Successfully fixed {conflicts_fixed} MAC address conflict(s)")
+            logger.info("Waiting 3 seconds for changes to take effect...")
+            time.sleep(3)
+        
+    except Exception as e:
+        logger.error(f"Error during MAC conflict check: {e}")
+        logger.error("Please fix MAC conflicts manually before running multiprocess mode")
+        import traceback
+        logger.error(traceback.format_exc())
+        sys.exit(1)
+    
+    logger.info("="*80 + "\n")
+    
     with Manager() as manager:
         task_queue = manager.Queue()
         for item in tasks_to_run:
@@ -740,7 +1043,7 @@ def run():
     parser.add_argument("--coding_max_steps", type=int, default=20)
     parser.add_argument("--cua_max_steps", type=int, default=25)
     parser.add_argument("--cut_off_steps", type=int, default=50)
-    parser.add_argument("--max_trajectory_length", type=int, default=3)
+    parser.add_argument("--max_trajectory_length", type=int, default=8)
 
     # Task/example config
     parser.add_argument("--domain", type=str, default="all")
@@ -1071,7 +1374,7 @@ def run():
         # Execute tasks one by one
         from tqdm import tqdm
         for domain, example_id in tqdm(tasks_to_run, desc="Processing tasks"):
-            logger.info(f"Processing {domain}/{example_id}")
+            logger.info(f"Processing {domain}/{example_id} for method {args.result_dir}")
             try:
                 # Create tasks list with only this task
                 single_task = [(domain, example_id)]
