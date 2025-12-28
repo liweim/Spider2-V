@@ -1,36 +1,28 @@
 {
-    "dagster": [
-        "02b1238f-efad-4076-9f47-d1144a02d23b",
-        "22ef9058-6188-422a-9c12-e6934e4ed936",
-        "215615ac-996f-406f-8c90-e67dd185b488",
-        "933b74ab-d240-4c71-bd5c-4b78f81bb48b",
-        "cc95a46e-6902-43c3-988a-90e0306dd7b9"
-    ],
-    "airflow": [
-        "67ee22b5-caf1-4aa9-92c5-57546b3d823c"
-    ],
     "airbyte": [
-        "52f71f15-b156-4ad7-b342-97a8a5926e25",
-        "60f97b80-cafc-454f-a31c-13bca1c42fa9",
-        "95ddd295-bb86-4f10-8d6b-6eb89ebb65cc",
-        "167b02e6-b5fa-4a59-b39c-bbfcac75d0b9"
+      "167b02e6-b5fa-4a59-b39c-bbfcac75d0b9",
+      "52f71f15-b156-4ad7-b342-97a8a5926e25",
+      "60f97b80-cafc-454f-a31c-13bca1c42fa9"
     ],
-    "metabase": [
-        "bb1540e7-d558-4c24-81df-4348e089edf6",
-        "53f051d4-3264-46fa-9598-28fb932f7b6c",
-        "6aa7117d-2881-492a-995d-134a163efe23",
-        "b96db2ae-552f-49fd-b9a9-9f7f66561e45",
-        "d67bab11-ca3b-4981-9d41-e67b03ac1d55"
+    "dagster": [
+      "cc95a46e-6902-43c3-988a-90e0306dd7b9"
     ],
-    "servicenow": [
-        "070b87f5-8a6f-4bb4-a7df-d4e9274fae21",
-        "3b9da56c-4e9f-455f-b91b-6147cafe44e3",
-        "d67180b5-d45c-4425-b222-236743fd6f88"
+    "excel": [
+      "30e3e107-1cfb-46ee-a755-2cd080d7ba6a",
+      "cd3c4994-b9e2-426b-8157-f7978ff55501"
     ],
     "jupyter": [
-        "b09a0441-20b3-45f1-966a-4d521e46c7ea",
-        "5085517b-69e9-467a-897b-21b8fd926bde",
-        "a4773fa9-c715-4293-8774-e99caa9d8e7c",
-        "2ed53418-f813-479f-b8a0-134bfebec393"
+      "2ed53418-f813-479f-b8a0-134bfebec393"
+    ],
+    "metabase": [
+      "b96db2ae-552f-49fd-b9a9-9f7f66561e45",
+      "bb1540e7-d558-4c24-81df-4348e089edf6"
+    ],
+    "servicenow": [
+      "070b87f5-8a6f-4bb4-a7df-d4e9274fae21",
+      "3b9da56c-4e9f-455f-b91b-6147cafe44e3"
+    ],
+    "snowflake": [
+      "b8a3addd-3044-41fd-b25d-f690302637d6"
     ]
-}
+  }

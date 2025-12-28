@@ -1,0 +1,28 @@
+{
+  "airbyte": [
+    "167b02e6-b5fa-4a59-b39c-bbfcac75d0b9",
+    "52f71f15-b156-4ad7-b342-97a8a5926e25",
+    "60f97b80-cafc-454f-a31c-13bca1c42fa9"
+  ],
+  "dagster": [
+    "cc95a46e-6902-43c3-988a-90e0306dd7b9"
+  ],
+  "excel": [
+    "30e3e107-1cfb-46ee-a755-2cd080d7ba6a",
+    "cd3c4994-b9e2-426b-8157-f7978ff55501"
+  ],
+  "jupyter": [
+    "2ed53418-f813-479f-b8a0-134bfebec393"
+  ],
+  "metabase": [
+    "b96db2ae-552f-49fd-b9a9-9f7f66561e45",
+    "bb1540e7-d558-4c24-81df-4348e089edf6"
+  ],
+  "servicenow": [
+    "070b87f5-8a6f-4bb4-a7df-d4e9274fae21",
+    "3b9da56c-4e9f-455f-b91b-6147cafe44e3"
+  ],
+  "snowflake": [
+    "b8a3addd-3044-41fd-b25d-f690302637d6"
+  ]
+}
