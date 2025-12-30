@@ -23,12 +23,11 @@ from google.api_core.exceptions import InvalidArgument, ResourceExhausted, Inter
 
 from mm_agents.accessibility_tree_wrap.heuristic_retrieve import filter_nodes, draw_bounding_boxes
 from mm_agents.prompt_templates import ACTION_SPACE_PROMPTS, OBSERVATION_SPACE_PROMPTS, SYSTEM_PROMPT
-from configs.config import ROAD2ALL_API_KEY as OPENAI_API_KEY
-from configs.config import ROAD2ALL_API_URL as OPENAI_API_URL
 
 logger = logging.getLogger("desktopenv.agent")
 
 pure_text_settings = ['a11y_tree']
+
 
 # Function to encode the image
 def encode_image(image_content):
@@ -52,6 +51,30 @@ def save_to_tmp_img_file(data_str):
     image.save(tmp_img_path)
 
     return tmp_img_path
+
+
+def get_model_pricing(model_name: str) -> Tuple[float, float]:
+    pricing = {
+        'gpt-3.5-turbo': {
+            'prompt': 0.5e-6,
+            'completion': 1.5e-6
+        },
+        'gpt-4-turbo': {
+            'prompt': 10e-6,
+            'completion': 30e-6
+        },
+        'gpt-4o': {
+            'prompt': 5e-6,
+            'completion': 15e-6
+        }
+    }
+    if model_name.startswith('gpt-3.5'): model_name = 'gpt-3.5-turbo'
+    elif model_name.startswith('gpt-4o'): model_name = 'gpt-4o'
+    elif model_name.startswith('gpt-4'): model_name = 'gpt-4-turbo'
+    if model_name in pricing:
+        return pricing[model_name]['prompt'], pricing[model_name]['completion']
+    logger.warning(f"Model {model_name} is not in the pricing list.")
+    return 0.0, 0.0
 
 
 def linearize_accessibility_tree(filtered_nodes: List[ET.Element], add_index: bool = False) -> str:
@@ -233,6 +256,13 @@ class PromptAgent:
         action_prompt = ACTION_SPACE_PROMPTS[action_key]
         observation_prompt = OBSERVATION_SPACE_PROMPTS[self.observation_space]
         self.system_message = SYSTEM_PROMPT.format(action_prompt=action_prompt, observation_prompt=observation_prompt, screen_width=screen_size['width'], screen_height=screen_size['height'])
+
+
+    def get_current_cost(self) -> str:
+        pc, cc = get_model_pricing(self.model)
+        total_cost = pc * self.usages["prompt_tokens"] + cc * self.usages["completion_tokens"]
+        logger.info(f'[INFO]: Current usage: {self.usages["prompt_tokens"] * 1e-6:.2f}M prompt tokens, {self.usages["completion_tokens"] * 1e-6:.2f}M completion tokens, cost ${total_cost:.2f} .')
+        return
 
 
     def add_action_infos(self, messages, action_list: List[Union[str, Dict]], infos: List[Dict], failed_only: bool = True) -> Dict:
@@ -577,11 +607,11 @@ class PromptAgent:
         if self.model.startswith("gpt"):
             headers = {
                 "Content-Type": "application/json",
-                "Authorization": f"Bearer {OPENAI_API_KEY}"
+                "Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}"
             }
             logger.info("Generating content with GPT model: %s", self.model)
             response = requests.post(
-                f"{OPENAI_API_URL}/chat/completions",
+                "https://api.openai.com/v1/chat/completions",
                 headers=headers,
                 json=payload
             )
@@ -591,7 +621,7 @@ class PromptAgent:
                     logger.error("Context length exceeded. Retrying with a smaller context.")
                     payload["messages"] = [payload["messages"][0]] + payload["messages"][-1:]
                     retry_response = requests.post(
-                        f"{OPENAI_API_URL}/chat/completions",
+                        "https://api.openai.com/v1/chat/completions",
                         headers=headers,
                         json=payload
                     )

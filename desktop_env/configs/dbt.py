@@ -156,8 +156,8 @@ def dbt_cloud_webui_login_setup(controller, **config):
     settings_file = config.get('settings_file', 'evaluation_examples/settings/dbt_cloud/settings.json')
     settings = json.load(open(settings_file, 'r'))
     url = "http://cloud.getdbt.com"
-    # if "cloud_host" in settings:
-    #     url = f"http://{settings['cloud_host']}"
+    if "cloud_host" in settings:
+        url = f"http://{settings['cloud_host']}"
 
     with sync_playwright() as p:
         browser = get_browser(p, remote_debugging_url)

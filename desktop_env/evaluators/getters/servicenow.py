@@ -48,16 +48,7 @@ def get_workarena_task_result(env, config: Dict[str, Any]) -> str:
         
         context = workarena_instance.context
         for page in context.pages:
-            try:
-                page.reload(timeout=300000) # the page.url is still the old url, need to refresh (5 min timeout)
-            except Exception as reload_error:
-                logger.error(f'[ERROR]: failed to reload page {page.url}: {reload_error}')
-                raise ValueError(f'[ERROR]: page reload timeout or failed - possibly due to session timeout')
-
-            # Check for session timeout after reload
-            if 'session_timeout.do' in page.url:
-                raise ValueError(f'[ERROR]: ServiceNow session has timed out. Page redirected to {page.url}')
-
+            page.reload() # the page.url is still the old url, need to refresh
             if compare_urls(page.url, active_url):
                 result, _, _, info = task.validate(page, messages)
                 logger.info(f'[INFO]: the task {type(task).__name__} is validated with result {result} and info {info}')

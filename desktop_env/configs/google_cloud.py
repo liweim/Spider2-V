@@ -531,7 +531,7 @@ def gcp_api_via_webgui(page, **config):
 
             enable_button.last.click()
             disable_button = page.locator('button[aria-label="Disable API" i]')
-            expect(disable_button).to_be_visible(timeout=300000) # waiting for the web response, may take longer time #30000
+            expect(disable_button).to_be_visible(timeout=300000) # waiting for the web response, may take longer time
             logger.info(f'Google API Service {product} is enabled for GCP: project_id={project_id}')
         else: # disable the API
             if manage_button.count() == 0: # the API is not enabled yet, do nothing
@@ -545,7 +545,7 @@ def gcp_api_via_webgui(page, **config):
             disable_button.click()
             confirm_disable_popups(page)
             enable_button = page.locator('button[aria-label="enable this API" i]').last
-            expect(enable_button).to_be_visible(timeout=300000) #30000
+            expect(enable_button).to_be_visible(timeout=300000)
             logger.info(f'Google API Service {product} is disabled for GCP: project_id={project_id}')
         return
 

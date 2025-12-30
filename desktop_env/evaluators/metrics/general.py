@@ -506,6 +506,7 @@ def check_file_existence(result: str) -> float:
         return 0.
     else:
         return 1.
+
     
 if __name__ == '__main__':
     print(check_direct_json_object([], rules={
