@@ -608,17 +608,17 @@ def run():
 
     # Import run function
     if args.method == "spider2v_agent":
-        from run_spider2v_agent import run
+        from agents.run_spider2v_agent import run
     elif args.method == "coact":
-        from run_coact import run
+        from agents.run_coact import run
     elif args.method == "agents3":
-        from run_agents3 import run
+        from agents.run_agents3 import run
     elif args.method == "agents2":
-        from run_agents2 import run
+        from agents.run_agents2 import run
     elif args.method == "hsa":
-        from run_hsa import run
+        from agents.run_hsa import run
     elif args.method == "gta1":
-        from run_gta1_agent import run
+        from agents.run_gta1_agent import run
     else:
         raise ValueError(f"Invalid method: {args.method}")
     

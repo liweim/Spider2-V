@@ -25,7 +25,4 @@ workarena-install
 ## bigquery
 需要双重验证
 
-$env:OPENAI_API_KEY="sk-E7gOgfTjf0tREnYXEa1767178b7f43499eBdA49389CdD905"
-$env:OPENAI_API_BASE="https://api2.road2all.com/v1"
-
 # OSWorld上需要安装dos2unix
